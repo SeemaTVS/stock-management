@@ -13,9 +13,19 @@ except Exception:
     PYZBAR_AVAILABLE = False
 
 # Path for Tesseract on Windows
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+import shutil
+import os
 
-st.set_page_config(page_title="TVS Agency Inventory Dashboard", layout="wide")
+# Automatically find Tesseract whether running on Windows or Streamlit Cloud
+tesseract_path = shutil.which("tesseract")
+if tesseract_path:
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+else:
+    # Fallback to default Windows path if running locally
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+# Automatically find Tesseract whether running on Windows or Streamlit Cloud
+
 st.title("TVS Agency Inventory & Order Management")
 
 CSV_FILE = "inventory.csv"
