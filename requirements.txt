@@ -3,3 +3,4 @@ pytesseract
 opencv-python
 pandas
 openpyxl
+tesseract-ocr
