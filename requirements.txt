@@ -3,3 +3,5 @@ pytesseract
 opencv-python
 pandas
 openpyxl
+streamlit-gsheets
+gspread
