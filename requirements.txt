@@ -5,3 +5,5 @@ st-gsheets-connection
 openpyxl
 pytesseract
 opencv-python-headless
+streamlit>=1.22.0
+streamlit-gsheets
