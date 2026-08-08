@@ -25,15 +25,14 @@ st.title("TVS Agency Inventory & Order Management")
 
 # 1. Load Data from Google Sheets
 def load_data():
-  conn = st.connection("gsheets", type="gsheets")
-df_loaded = conn.read(
-    spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0",
-    ttl=0
+    conn = st.connection("gsheets", type="gsheets")
+    df_loaded = conn.read(
+        spreadsheet="https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0",
+        ttl=0
     )
-if 'units_sold' not in df_loaded.columns:
+    if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
     return df_loaded
-
 import gspread
 from google.oauth2.service_account import Credentials
 
