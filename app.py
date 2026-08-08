@@ -53,12 +53,7 @@ def save_data(df_to_save):
             df_to_save[col] = 0
             
     conn = st.connection("gsheets", type=GSheetsConnection)
-    client = conn._instance.client
-    
-    sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
-    worksheet = sh.get_worksheet(0)
-    worksheet.clear()
-    worksheet.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
+    conn.update(data=df_to_save, spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
 df = load_data()
 # 2. TVS Barcode/QR & OCR Extractor
 def extract_label_data(img_obj):
