@@ -245,12 +245,12 @@ if not df.empty:
         selected_cat = st.selectbox("Filter by Category", categories)
 
         display_df = df if selected_cat == "All" else df[df['category'] == selected_cat]
-        st.dataframe(display_df[['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'units_sold', 'status']], use_container_width=True)
+        st.dataframe(display_df[['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'units_sold']], height=500)
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
         st.caption("You can edit values directly in the table below and click Save.")
-        edited_df = st.data_editor(df, num_rows="dynamic", key="editor")
+        edited_df = st.data_editor(df, num_rows="dynamic", key="editor", height=500)
         if st.button("Save Changes to CSV"):
             save_data(edited_df)
             st.success("Database updated successfully!")
