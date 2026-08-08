@@ -26,11 +26,21 @@ st.title("TVS Agency Inventory & Order Management")
 # 1. Load Data from Google Sheets
 from google.oauth2.service_account import Credentials
 import gspread
-
 def load_data():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
         creds_dict = dict(st.secrets["connections"]["gsheets"])
+        # Automatically fix private key padding if newlines were stripped
+        pk = creds_dict["private_key"]
+        if "-----BEGIN PRIVATE KEY-----" in pk and "\n" not in pk.strip():
+            pk = pk.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+            pk = pk.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----")
+            # Reinsert newlines every 64 characters if it's a single block string
+            body = pk.replace("-----BEGIN PRIVATE KEY-----", "").replace("-----END PRIVATE KEY-----", "").strip()
+            body = "".join(body.split())
+            formatted_body = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
+            creds_dict["private_key"] = f"-----BEGIN PRIVATE KEY-----\n{formatted_body}\n-----END PRIVATE KEY-----\n"
+            
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0").sheet1
