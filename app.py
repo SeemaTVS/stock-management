@@ -32,7 +32,7 @@ df_loaded = conn.read(
     )
 if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
-    return df_loaded
+return df_loaded
 
 import gspread
 from google.oauth2.service_account import Credentials
