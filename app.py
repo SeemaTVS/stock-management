@@ -40,16 +40,6 @@ def load_data():
     if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
     return df_loaded
-import gspread
-
-import gspread
-from google.oauth2.service_account import Credentials
-import gspread
-
-import gspread
-from google.oauth2.service_account import Credentials
-import gspread
-from google.oauth2.service_account import Credentials
 
 import gspread
 from google.oauth2.service_account import Credentials
