@@ -4,4 +4,4 @@ gspread
 google-auth
 openpyxl
 pytesseract
-streamlit-gsheets
+
