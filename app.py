@@ -28,7 +28,7 @@ st.title("TVS Agency Inventory & Order Management")
 def load_data():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
-        creds_path = r"C:\Users\Seema Tvs\tvs_inventory\credentials.json"
+        creds_path = "credentials.json"
         creds = Credentials.from_service_account_file(creds_path, scopes=scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0").sheet1
