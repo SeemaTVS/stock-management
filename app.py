@@ -6,7 +6,7 @@ from PIL import Image
 import pytesseract
 import shutil
 import gspread
-import from google.oauth2.service_account import credentials
+import from google.oauth2.service_account import Credentials
 # Try importing pyzbar for QR/Barcode scanning
 try:
     from pyzbar.pyzbar import decode
