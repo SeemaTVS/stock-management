@@ -4,4 +4,4 @@ gspread
 streamlit-gsheets
 openpyxl
 pytesseract
-opencv-python
+opencv-python-headless
