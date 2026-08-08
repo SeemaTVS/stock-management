@@ -40,6 +40,7 @@ def load_data():
     if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
     return df_loaded
+import gspread
 
 def save_data(df_to_save):
     conn = st.connection("gsheets", type=GSheetsConnection)
@@ -47,10 +48,15 @@ def save_data(df_to_save):
     for col in base_cols:
         if col not in df_to_save.columns:
             df_to_save[col] = 0
-    conn.update(
-        spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0",
-        data=df_to_save
-    )
+            
+    # Direct gspread client write to completely avoid connection update errors
+    client = conn.client
+    sh = client.open_by_url("https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
+    worksheet = sh.get_worksheet(0)
+    worksheet.clear()
+    worksheet.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
+
+    
 df = load_data()
 # 2. TVS Barcode/QR & OCR Extractor
 def extract_label_data(img_obj):
