@@ -1,9 +1,6 @@
 streamlit
 pandas
 gspread
-st-gsheets-connection
+google-auth
 openpyxl
 pytesseract
-opencv-python-headless
-streamlit>=1.22.0
-streamlit-gsheets
