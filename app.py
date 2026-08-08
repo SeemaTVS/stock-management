@@ -47,8 +47,8 @@ def save_data(df_to_save):
     for col in base_cols:
         if col not in df_to_save.columns:
             df_to_save[col] = 0
-    conn.update(data=df_to_save, spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
-
+    # Use worksheet parameter explicitly to avoid layout write errors
+    conn.update(worksheet="Sheet1", data=df_to_save)
 df = load_data()
 # 2. TVS Barcode/QR & OCR Extractor
 def extract_label_data(img_obj):
