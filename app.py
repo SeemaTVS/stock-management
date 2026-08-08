@@ -47,6 +47,8 @@ def load_data():
                 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 
                 'max_capacity', 'units_sold'
             ])
+            # Remove the file path approach and use this:
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
