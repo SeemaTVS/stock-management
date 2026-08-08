@@ -34,8 +34,8 @@ from streamlit_gsheets import GSheetsConnection
 def load_data():
   conn = st.connection("gsheets", type="gsheets")
     df_loaded = conn.read(
-        spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0",
-        ttl=0
+    spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0",
+    ttl=0
     )
     if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
