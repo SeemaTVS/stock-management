@@ -76,6 +76,7 @@ def save_data(df_to_save):
     sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
     worksheet = sheet.get_worksheet(0)
     worksheet.clear()
+    df_to_save.to_csv("inventory.csv", index=False)
     worksheet.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
 df = load_data()
 # 2. TVS Barcode/QR & OCR Extractor
