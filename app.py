@@ -48,8 +48,6 @@ def load_data():
             import json
 
 # Inside your load_data() function:
-creds_info = json.loads(st.secrets["gcp_json"])
-creds = Credentials.from_service_account_info(creds_info, scopes=scope)
 
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
