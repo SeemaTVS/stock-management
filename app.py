@@ -26,7 +26,7 @@ st.title("TVS Agency Inventory & Order Management")
 # 1. Load Data from Google Sheets
 def load_data():
   conn = st.connection("gsheets", type="gsheets")
-    df_loaded = conn.read(
+df_loaded = conn.read(
     spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0",
     ttl=0
     )
