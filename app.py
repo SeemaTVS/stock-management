@@ -48,6 +48,8 @@ import gspread
 
 import gspread
 from google.oauth2.service_account import Credentials
+import gspread
+from google.oauth2.service_account import Credentials
 
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
@@ -55,8 +57,14 @@ def save_data(df_to_save):
         if col not in df_to_save.columns:
             df_to_save[col] = 0
             
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    creds = Credentials.from_service_account_info(dict(st.secrets["connections"]["gsheets"]), scopes=scope)
+    # Safely pull credentials from Streamlit secrets depending on structure
+    if "connections" in st.secrets and "gsheets" in st.secrets["connections"]:
+        creds_dict = dict(st.secrets["connections"]["gsheets"])
+    else:
+        creds_dict = dict(st.secrets["gsheets"])
+        
+    scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     
     sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
