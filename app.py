@@ -28,27 +28,28 @@ else:
 
 st.title("TVS Agency Inventory & Order Management")
 
-CSV_FILE = "inventory.csv"
+from streamlit_gsheets import GSheetsConnection
 
-# 1. Load Data
+# 1. Load Data from Google Sheets
 def load_data():
-    if not os.path.exists(CSV_FILE):
-        st.error(f"File {CSV_FILE} not found.")
-        return pd.DataFrame()
-    df_loaded = pd.read_csv(CSV_FILE)
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    df_loaded = conn.read(
+        spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0",
+        ttl=0
+    )
     if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
     return df_loaded
 
 def save_data(df_to_save):
+    conn = st.connection("gsheets", type=GSheetsConnection)
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
         if col not in df_to_save.columns:
             df_to_save[col] = 0
-    df_to_save[base_cols].to_csv(CSV_FILE, index=False)
+    conn.update(data=df_to_save, spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
 
 df = load_data()
-
 # 2. TVS Barcode/QR & OCR Extractor
 def extract_label_data(img_obj):
     # STEP A: Try Barcode / QR Code first
