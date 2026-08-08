@@ -1,7 +1,7 @@
 streamlit
+pandas
+gspread
+streamlit-gsheets
+openpyxl
 pytesseract
 opencv-python
-pandas
-openpyxl
-streamlit-gsheets
-gspread
