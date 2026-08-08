@@ -4,6 +4,7 @@ import re
 import os
 from PIL import Image
 import pytesseract
+import shutil
 
 # Try importing pyzbar for QR/Barcode scanning
 try:
@@ -11,10 +12,6 @@ try:
     PYZBAR_AVAILABLE = True
 except Exception:
     PYZBAR_AVAILABLE = False
-
-# Path for Tesseract on Windows
-import shutil
-import os
 
 # Automatically find Tesseract whether running on Windows or Streamlit Cloud
 tesseract_path = shutil.which("tesseract")
@@ -24,11 +21,7 @@ else:
     # Fallback to default Windows path if running locally
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-# Automatically find Tesseract whether running on Windows or Streamlit Cloud
-
 st.title("TVS Agency Inventory & Order Management")
-
-from streamlit_gsheets import GSheetsConnection
 
 # 1. Load Data from Google Sheets
 def load_data():
