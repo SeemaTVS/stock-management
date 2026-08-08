@@ -23,13 +23,10 @@ else:
 
 st.title("TVS Agency Inventory & Order Management")
 
-# 1. Load Data from Google Sheets
-# 1. Load Data
 def load_data():
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     try:
-        creds_path = "credentials.json"
-        creds = Credentials.from_service_account_file(creds_path, scopes=scope)
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0").sheet1
         data = sheet.get_all_records()
@@ -47,8 +44,6 @@ def load_data():
                 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 
                 'max_capacity', 'units_sold'
             ])
-            # Remove the file path approach and use this:
-creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scope)
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
