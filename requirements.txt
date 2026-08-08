@@ -1,7 +1,7 @@
 streamlit
 pandas
 gspread
-streamlit-gsheets
+st-gsheets-connection
 openpyxl
 pytesseract
 opencv-python-headless
