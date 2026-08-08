@@ -24,18 +24,31 @@ else:
 st.title("TVS Agency Inventory & Order Management")
 
 # 1. Load Data from Google Sheets
-def load_data():
-    conn = st.connection("gsheets", type="gsheets")
-    df_loaded = conn.read(
-        spreadsheet="https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0",
-        ttl=0
-    )
-    if 'units_sold' not in df_loaded.columns:
-        df_loaded['units_sold'] = 0
-    return df_loaded
-import gspread
 from google.oauth2.service_account import Credentials
+import gspread
 
+def load_data():
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    try:
+        creds_dict = dict(st.secrets["connections"]["gsheets"])
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0").sheet1
+        data = sheet.get_all_records()
+        df_loaded = pd.DataFrame(data)
+        if 'units_sold' not in df_loaded.columns:
+            df_loaded['units_sold'] = 0
+        return df_loaded
+    except Exception as e:
+        st.warning(f"Google Sheets load error: {e}. Using local backup.")
+        try:
+            return pd.read_csv("inventory.csv")
+        except Exception:
+            return pd.DataFrame(columns=[
+                'part_number', 'description', 'category', 'model', 
+                'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 
+                'max_capacity', 'units_sold'
+            ])
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
