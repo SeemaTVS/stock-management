@@ -46,14 +46,23 @@ import gspread
 from google.oauth2.service_account import Credentials
 import gspread
 
+import gspread
+from google.oauth2.service_account import Credentials
+
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
         if col not in df_to_save.columns:
             df_to_save[col] = 0
             
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    conn.update(data=df_to_save, spreadsheet="https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
+    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    creds = Credentials.from_service_account_info(dict(st.secrets["connections"]["gsheets"]), scopes=scope)
+    client = gspread.authorize(creds)
+    
+    sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1Ri014cRyCS2I-IODe-9D2zp4bZ4aSUg_d84vWx5uENs/edit?gid=0#gid=0")
+    worksheet = sheet.get_worksheet(0)
+    worksheet.clear()
+    worksheet.update([df_to_save.columns.values.tolist()] + df_to_save.values.tolist())
 df = load_data()
 # 2. TVS Barcode/QR & OCR Extractor
 def extract_label_data(img_obj):
