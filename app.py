@@ -11,10 +11,13 @@ tesseract_path = shutil.which("tesseract")
 if tesseract_path:
     pytesseract.pytesseract.tesseract_cmd = tesseract_path
 else:
-    # Explicit path for Tesseract on Windows fallback
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-st.set_page_config(page_title="TVS Agency Inventory Dashboard", layout="wide")
+st.set_page_config(
+    page_title="TVS Agency Inventory Dashboard", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
 
 st.title("TVS Agency Inventory & Order Management")
 
@@ -29,7 +32,6 @@ def load_data():
         ])
     df_loaded = pd.read_csv(CSV_FILE)
     
-    # Remove category and max_capacity columns if they still exist in the CSV
     for col_to_drop in ['category', 'max_capacity']:
         if col_to_drop in df_loaded.columns:
             df_loaded = df_loaded.drop(columns=[col_to_drop])
@@ -70,7 +72,6 @@ def extract_part_number(scanned_text):
 
 # --- SIDEBAR CONTROLS ---
 
-# Section A: Snap Label Photo
 st.sidebar.header("📷 Snap Label Photo")
 uploaded_photo = st.sidebar.file_uploader("Take Photo of Label", type=["jpg", "jpeg", "png"])
 
@@ -88,8 +89,6 @@ if uploaded_photo:
 manual_input = st.sidebar.text_input("Or type Part # manually:", value=scanned_input if scanned_input else "")
 
 active_part = manual_input if manual_input else scanned_input
-
-# Store auto-fill default for new part creation
 default_new_part = ""
 
 if active_part:
@@ -107,7 +106,6 @@ if active_part:
 
 st.sidebar.markdown("---")
 
-# Section B: Manual Quantity Adjustment
 st.sidebar.header("⚙️ Manual Stock Adjustment")
 selected_part = st.sidebar.selectbox("Select Part to Update", df['part_number'].unique() if not df.empty else [])
 if selected_part:
@@ -133,7 +131,6 @@ if selected_part:
 
 st.sidebar.markdown("---")
 
-# Section C: Add Completely New Part Form
 st.sidebar.header("➕ Add New Part to Inventory")
 with st.sidebar.form("add_part_form", clear_on_submit=True):
     new_part_no = st.text_input("Part Number", value=default_new_part)
@@ -179,6 +176,18 @@ if not df.empty:
 
     df['status'] = df.apply(calculate_status, axis=1)
 
+    # Persistent Backup Helper UI
+    st.sidebar.markdown("---")
+    st.sidebar.header("💾 Sync Backup")
+    csv_bytes = df.drop(columns=['status'], errors='ignore').to_csv(index=False).encode('utf-8')
+    st.sidebar.download_button(
+        label="Download Updated inventory.csv",
+        data=csv_bytes,
+        file_name="inventory.csv",
+        mime="text/csv",
+        help="Download this file and upload it to your GitHub repository to save your new parts permanently."
+    )
+
     tab1, tab2, tab3 = st.tabs(["📊 Overview & Stock", "✏️ Edit Inventory Data", "🚨 Reorder Alerts"])
 
     with tab1:
@@ -188,7 +197,7 @@ if not df.empty:
     with tab2:
         st.subheader("Interactive Master Data Editor")
         st.caption("You can edit values directly in the table below and click Save.")
-        edited_df = st.data_editor(df, num_rows="dynamic", key="editor")
+        edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
         if st.button("Save Changes to CSV"):
             save_data(edited_df)
             st.success("Database updated successfully!")
