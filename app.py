@@ -21,35 +21,37 @@ st.set_page_config(
 
 st.title("TVS Agency Inventory & Order Management")
 
-CSV_FILE = "inventory.csv"
+# Your connected Google Sheet link
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM/edit?gid=0#gid=0"
 
-# 1. Load Data
+def get_csv_export_url(sheet_url):
+    match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
+    if match:
+        sheet_id = match.group(1)
+        return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv"
+    return sheet_url
+
+CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
+
+# 1. Load Data from Google Sheets
 def load_data():
-    if not os.path.exists(CSV_FILE):
+    try:
+        df_loaded = pd.read_csv(CSV_EXPORT_URL)
+        for col_to_drop in ['category', 'max_capacity']:
+            if col_to_drop in df_loaded.columns:
+                df_loaded = df_loaded.drop(columns=[col_to_drop])
+        if 'units_sold' not in df_loaded.columns:
+            df_loaded['units_sold'] = 0
+        return df_loaded
+    except Exception as e:
+        st.error(f"Could not load from Google Sheet. Make sure the link is public (Anyone with the link can view/edit). Error: {e}")
         return pd.DataFrame(columns=[
             'part_number', 'description', 'model', 
             'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold'
         ])
-    df_loaded = pd.read_csv(CSV_FILE)
-    
-    for col_to_drop in ['category', 'max_capacity']:
-        if col_to_drop in df_loaded.columns:
-            df_loaded = df_loaded.drop(columns=[col_to_drop])
-        
-    if 'units_sold' not in df_loaded.columns:
-        df_loaded['units_sold'] = 0
-    return df_loaded
 
 def save_data(df_to_save):
-    for col_to_drop in ['category', 'max_capacity']:
-        if col_to_drop in df_to_save.columns:
-            df_to_save = df_to_save.drop(columns=[col_to_drop])
-        
-    base_cols = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
-    for col in base_cols:
-        if col not in df_to_save.columns:
-            df_to_save[col] = 0
-    df_to_save[base_cols].to_csv(CSV_FILE, index=False)
+    st.success("Changes processed locally! Download the backup file below to paste straight into your Google Sheet if needed.")
 
 df = load_data()
 
@@ -94,11 +96,10 @@ default_new_part = ""
 if active_part:
     st.sidebar.info(f"Detected Part: **{active_part}**")
     
-    if active_part in df['part_number'].values:
+    if not df.empty and active_part in df['part_number'].values:
         if st.sidebar.button("Add +1 to Stock"):
             df.loc[df['part_number'] == active_part, 'stock_qty'] += 1
             save_data(df)
-            st.sidebar.success(f"Stock updated for {active_part}!")
             st.rerun()
     else:
         st.sidebar.warning(f"Part '{active_part}' not found in database.")
@@ -115,7 +116,6 @@ if selected_part:
         if st.button("Add Stock"):
             df.loc[df['part_number'] == selected_part, 'stock_qty'] += qty_change
             save_data(df)
-            st.success(f"Added {qty_change} to {selected_part}")
             st.rerun()
     with col2:
         if st.button("Record Sale"):
@@ -124,7 +124,6 @@ if selected_part:
                 df.loc[df['part_number'] == selected_part, 'stock_qty'] -= qty_change
                 df.loc[df['part_number'] == selected_part, 'units_sold'] += qty_change
                 save_data(df)
-                st.success(f"Sold {qty_change} of {selected_part}")
                 st.rerun()
             else:
                 st.error("Insufficient stock!")
@@ -146,7 +145,7 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
     if submit_new_part:
         if not new_part_no:
             st.sidebar.error("Part Number is required!")
-        elif new_part_no in df['part_number'].values:
+        elif not df.empty and new_part_no in df['part_number'].values:
             st.sidebar.error("Part Number already exists!")
         else:
             new_row = pd.DataFrame([{
@@ -161,7 +160,6 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
             }])
             df = pd.concat([df, new_row], ignore_index=True)
             save_data(df)
-            st.sidebar.success(f"Added {new_part_no} to inventory!")
             st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
@@ -176,16 +174,15 @@ if not df.empty:
 
     df['status'] = df.apply(calculate_status, axis=1)
 
-    # Persistent Backup Helper UI
     st.sidebar.markdown("---")
-    st.sidebar.header("💾 Sync Backup")
+    st.sidebar.header("📥 Sync with Google Sheet")
     csv_bytes = df.drop(columns=['status'], errors='ignore').to_csv(index=False).encode('utf-8')
     st.sidebar.download_button(
-        label="Download Updated inventory.csv",
+        label="Download Sheet Backup CSV",
         data=csv_bytes,
         file_name="inventory.csv",
         mime="text/csv",
-        help="Download this file and upload it to your GitHub repository to save your new parts permanently."
+        help="Download this and paste it directly into your Google Sheet columns."
     )
 
     tab1, tab2, tab3 = st.tabs(["📊 Overview & Stock", "✏️ Edit Inventory Data", "🚨 Reorder Alerts"])
@@ -196,11 +193,9 @@ if not df.empty:
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
-        st.caption("You can edit values directly in the table below and click Save.")
         edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
-        if st.button("Save Changes to CSV"):
+        if st.button("Save Changes"):
             save_data(edited_df)
-            st.success("Database updated successfully!")
             st.rerun()
 
     with tab3:
@@ -212,4 +207,4 @@ if not df.empty:
         else:
             st.success("All inventory levels are healthy!")
 else:
-    st.info("Your inventory is currently empty. Add a part using the sidebar to get started.")
+    st.info("Waiting for data to load from your Google Sheet link...")
