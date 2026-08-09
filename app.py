@@ -34,22 +34,35 @@ def load_data():
         for col in EXPECTED_COLS:
             if col not in df_loaded.columns:
                 df_loaded[col] = ""
-        if 'units_sold' not in df_loaded.columns:
-            df_loaded['units_sold'] = 0
+        
+        # Ensure numerical columns are properly formatted as numbers, filling blanks with 0
+        num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+        for col in num_cols:
+            df_loaded[col] = pd.to_numeric(df_loaded[col], errors='fillna').fillna(0)
             
         df_loaded = df_loaded.dropna(subset=['part_number'])
+        df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
         return df_loaded
     except Exception as e:
         st.error(f"Load error: {e}")
         return pd.DataFrame(columns=EXPECTED_COLS)
 
 def save_data(df_to_save):
-    for col in EXPECTED_COLS:
-        if col not in df_to_save.columns:
-            df_to_save[col] = 0
+    try:
+        # Clean up dataframe types before converting to dict to prevent float conversion crashes
+        for col in EXPECTED_COLS:
+            if col not in df_to_save.columns:
+                df_to_save[col] = ""
+        
+        num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+        for col in num_cols:
+            df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0)
             
-    if WEB_APP_URL:
-        try:
+        df_to_save['part_number'] = df_to_save['part_number'].astype(str).str.strip()
+        df_to_save = df_to_save.dropna(subset=['part_number'])
+        df_to_save = df_to_save[df_to_save['part_number'] != ""]
+
+        if WEB_APP_URL:
             with st.spinner("Syncing changes to Google Sheet..."):
                 data_dict = df_to_save[EXPECTED_COLS].to_dict(orient="records")
                 response = requests.post(WEB_APP_URL, json=data_dict, timeout=15)
@@ -58,8 +71,8 @@ def save_data(df_to_save):
                 st.sidebar.success("Successfully synced!")
             else:
                 st.sidebar.error(f"Sync failed: {response.status_code}")
-        except Exception as e:
-            st.sidebar.error(f"Sync error: {e}")
+    except Exception as e:
+        st.sidebar.error(f"Float/Sync error: {e}")
 
 df = load_data()
 
@@ -80,7 +93,7 @@ if not df.empty and 'part_number' in df.columns:
                 st.rerun()
         with col2:
             if st.sidebar.button("Record Sale"):
-                current_stock = df.loc[df['part_number'] == selected_part, 'stock_qty'].values[0]
+                current_stock = int(df.loc[df['part_number'] == selected_part, 'stock_qty'].values[0])
                 if current_stock >= qty_change:
                     df.loc[df['part_number'] == selected_part, 'stock_qty'] -= qty_change
                     df.loc[df['part_number'] == selected_part, 'units_sold'] += qty_change
@@ -104,17 +117,17 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
     submit_new_part = st.form_submit_button("Add to Database")
     
     if submit_new_part:
-        if not new_part_no:
+        if not new_part_no.strip():
             st.sidebar.error("Part Number is required!")
         else:
             new_row = pd.DataFrame([{
                 'part_number': new_part_no.strip(),
                 'description': new_desc.strip(),
                 'model': new_model.strip(),
-                'unit_cost': new_cost,
-                'unit_mrp': new_mrp,
-                'stock_qty': new_qty,
-                'min_threshold': new_min,
+                'unit_cost': float(new_cost),
+                'unit_mrp': float(new_mrp),
+                'stock_qty': int(new_qty),
+                'min_threshold': int(new_min),
                 'units_sold': 0
             }])
             df = pd.concat([df, new_row], ignore_index=True)
