@@ -12,7 +12,6 @@ tesseract_path = shutil.which("tesseract")
 if tesseract_path:
     pytesseract.pytesseract.tesseract_cmd = tesseract_path
 else:
-    # Fallback to default Windows path if running locally
     pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 try:
@@ -27,15 +26,21 @@ CSV_FILE = "inventory.csv"
 
 def load_data():
     try:
-        return pd.read_csv("inventory.csv")
+        df = pd.read_csv(CSV_FILE)
+        if 'category' in df.columns:
+            df = df.drop(columns=['category'])
+        return df
     except Exception:
         return pd.DataFrame(columns=[
-            'part_number', 'description', 'category', 'model', 
+            'part_number', 'description', 'model', 
             'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 
             'max_capacity', 'units_sold'
         ])
+
 def save_data(df_to_save):
-    base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
+    if 'category' in df_to_save.columns:
+        df_to_save = df_to_save.drop(columns=['category'])
+    base_cols = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
         if col not in df_to_save.columns:
             df_to_save[col] = 0
@@ -47,7 +52,7 @@ if 'cart' not in st.session_state:
     st.session_state.cart = {}
 
 st.sidebar.header("Navigation")
-page = st.sidebar.radio("Go to", ["Dashboard", "Inventory Management", "Billing / POS", "Analytics & Reports"])
+page = st.sidebar.radio("Go to", ["Dashboard", "Inventory Management", "Scanner", "Billing / POS", "Analytics & Reports"])
 
 if page == "Dashboard":
     st.subheader("Inventory Dashboard")
@@ -65,17 +70,38 @@ if page == "Dashboard":
         st.subheader("Current Stock Overview")
         st.dataframe(df, use_container_width=True)
     else:
-        st.info("No inventory data loaded. Please upload a CSV file.")
+        st.info("No inventory data loaded.")
 
 elif page == "Inventory Management":
     st.subheader("Manage Inventory Items")
     if not df.empty:
+        st.markdown("### Add / Remove or Edit Items")
         edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
         if st.button("Save Changes"):
             save_data(edited_df)
             st.success("Inventory updated successfully!")
     else:
         st.info("No data available to manage.")
+
+elif page == "Scanner":
+    st.subheader("Barcode / Image Scanner")
+    uploaded_image = st.file_uploader("Upload barcode or part image", type=["png", "jpg", "jpeg"])
+    if uploaded_image is not None:
+        image = Image.open(uploaded_image)
+        st.image(image, caption="Uploaded Image", use_container_width=True)
+        
+        extracted_text = pytesseract.image_to_string(image)
+        st.write("**Extracted Text / Part Number:**")
+        st.code(extracted_text)
+        
+        found_match = False
+        for _, row in df.iterrows():
+            if str(row['part_number']) in extracted_text:
+                st.success(f"Found Match: {row['part_number']} - {row['description']}")
+                st.write(f"Stock Qty: {row['stock_qty']} | MRP: ₹{row['unit_mrp']}")
+                found_match = True
+        if not found_match and extracted_text.strip():
+            st.warning("No matching part number found in inventory.")
 
 elif page == "Billing / POS":
     st.subheader("Point of Sale & Billing")
