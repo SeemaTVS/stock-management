@@ -71,9 +71,13 @@ def save_data(df_to_save):
             data_dict = df_to_save[EXPECTED_COLS].to_dict(orient="records")
             response = requests.post(WEB_APP_URL, json=data_dict)
             if response.status_code == 200:
-                st.sidebar.success("Successfully synced to Google Sheet!")
+                res_json = response.json()
+                if res_json.get("status") == "success":
+                    st.sidebar.success("Successfully synced to Google Sheet!")
+                else:
+                    st.sidebar.error(f"Apps Script Error: {res_json.get('message')}")
             else:
-                st.sidebar.error("Failed to sync with Google Sheet.")
+                st.sidebar.error(f"HTTP Error: {response.status_code} - {response.text}")
         except Exception as e:
             st.sidebar.error(f"Sync error: {e}")
 
