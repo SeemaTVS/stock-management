@@ -85,7 +85,7 @@ def save_data(df_to_save):
 
 df = load_data()
 
-# Targeted TVS Part Number OCR Parser (Looks for standard codes like NF040370)
+# Targeted TVS Part Number OCR Parser
 def extract_part_number(scanned_text):
     if not scanned_text:
         return ""
@@ -93,12 +93,10 @@ def extract_part_number(scanned_text):
     lines = scanned_text.split('\n')
     for line in lines:
         cleaned_line = line.strip().upper()
-        # Look for typical TVS part formats: 2 letters followed by numbers (e.g., NF040370)
         match = re.search(r'\b[A-Z]{2}\d{6}\b', cleaned_line)
         if match:
             return match.group(0)
             
-    # Fallback: find any alphanumeric code sequence of 7-10 characters
     all_matches = re.findall(r'\b[A-Z0-9]{7,10}\b', scanned_text.upper())
     if all_matches:
         return all_matches[0]
@@ -207,39 +205,12 @@ if uploaded_photo:
     except Exception as e:
         st.sidebar.error(f"Scanner Error: {e}")
 
-manual_input = st.sidebar.text_input("Part Number:", value=scanned_part_code)
-
 st.sidebar.markdown("---")
-st.sidebar.header("⚙️ Manual Stock Adjustment")
-if not df.empty and 'part_number' in df.columns:
-    part_options = df['part_number'].unique()
-    selected_part = st.sidebar.selectbox("Select Part to Update", part_options)
 
-    if selected_part:
-        qty_change = st.sidebar.number_input("Quantity Change (+ or -)", value=1, step=1)
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            if st.sidebar.button("Add Stock"):
-                df.loc[df['part_number'] == selected_part, 'stock_qty'] += qty_change
-                save_data(df)
-                time.sleep(1)
-                st.rerun()
-        with col2:
-            if st.sidebar.button("Record Sale"):
-                current_stock = int(df.loc[df['part_number'] == selected_part, 'stock_qty'].values[0])
-                if current_stock >= qty_change:
-                    df.loc[df['part_number'] == selected_part, 'stock_qty'] -= qty_change
-                    df.loc[df['part_number'] == selected_part, 'units_sold'] += qty_change
-                    save_data(df)
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.sidebar.error("Insufficient stock!")
-
-st.sidebar.markdown("---")
+# 1. ADD NEW PART (Moved right below scanner & auto-filled)
 st.sidebar.header("➕ Add New Part")
 with st.sidebar.form("add_part_form", clear_on_submit=True):
-    new_part_no = st.text_input("Part Number", value=manual_input)
+    new_part_no = st.text_input("Part Number", value=scanned_part_code)
     new_desc = st.text_input("Description")
     new_model = st.text_input("Model", value="Universal")
     new_cost = st.number_input("Unit Cost (₹)", min_value=0.0, value=0.0, step=1.0)
@@ -267,6 +238,35 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
             save_data(df)
             time.sleep(1)
             st.rerun()
+
+st.sidebar.markdown("---")
+
+# 2. MANUAL STOCK ADJUSTMENT (Moved to the bottom)
+st.sidebar.header("⚙️ Manual Stock Adjustment")
+if not df.empty and 'part_number' in df.columns:
+    part_options = df['part_number'].unique()
+    selected_part = st.sidebar.selectbox("Select Part to Update", part_options)
+
+    if selected_part:
+        qty_change = st.sidebar.number_input("Quantity Change (+ or -)", value=1, step=1)
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            if st.sidebar.button("Add Stock"):
+                df.loc[df['part_number'] == selected_part, 'stock_qty'] += qty_change
+                save_data(df)
+                time.sleep(1)
+                st.rerun()
+        with col2:
+            if st.sidebar.button("Record Sale"):
+                current_stock = int(df.loc[df['part_number'] == selected_part, 'stock_qty'].values[0])
+                if current_stock >= qty_change:
+                    df.loc[df['part_number'] == selected_part, 'stock_qty'] -= qty_change
+                    df.loc[df['part_number'] == selected_part, 'units_sold'] += qty_change
+                    save_data(df)
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.sidebar.error("Insufficient stock!")
 
 # --- MAIN DASHBOARD TABS ---
 if not df.empty:
