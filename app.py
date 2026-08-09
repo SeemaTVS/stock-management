@@ -96,12 +96,11 @@ def extract_part_number(scanned_text):
         
     return cleaned
 
-# Helper function to generate receipt image with diagonally tilted colored watermark & TVS branding
-def generate_receipt_image(cust_name, bill_items, grand_total):
-    img_width, img_height = 600, 850
+# Helper function to generate receipt image with service charge, discount, and watermark
+def generate_receipt_image(cust_name, bill_items, service_charge, discount, final_total):
+    img_width, img_height = 600, 920
     base_img = Image.new("RGB", (img_width, img_height), color="white")
     
-    # Create a separate transparent layer for the diagonal watermark
     txt_layer = Image.new("RGBA", base_img.size, (255, 255, 255, 0))
     try:
         font_wm = ImageFont.truetype("arial.ttf", 55)
@@ -111,11 +110,9 @@ def generate_receipt_image(cust_name, bill_items, grand_total):
         font_logo = ImageFont.load_default()
 
     draw_wm = ImageDraw.Draw(txt_layer)
-    # Draw centered background logo placeholder and large diagonally tilted colored watermark text
-    draw_wm.text((150, 320), "TVS [LOGO]", fill=(220, 230, 245, 100), font=font_logo)
-    draw_wm.text((80, 400), "SEEMA TVS", fill=(210, 225, 240, 120), font=font_wm)
+    draw_wm.text((150, 350), "TVS [LOGO]", fill=(220, 230, 245, 100), font=font_logo)
+    draw_wm.text((80, 440), "SEEMA TVS", fill=(210, 225, 240, 120), font=font_wm)
     
-    # Rotate watermark layer diagonally
     rotated_txt = txt_layer.rotate(25, expand=1)
     base_img.paste(rotated_txt, (-50, -50), rotated_txt)
 
@@ -157,17 +154,35 @@ def generate_receipt_image(cust_name, bill_items, grand_total):
         draw.text((460, y_offset + 10), f"Rs. {item['total']:.2f}", fill="black", font=font_regular)
         y_offset += 60
         
-    draw.line([(30, y_offset + 10), (570, y_offset + 10)], fill="black", width=2)
+    draw.line([(30, y_offset + 10), (570, y_offset + 10)], fill="black", width=1)
+    
+    # Additional Charges & Discounts Breakdown
+    y_offset += 20
+    draw.text((30, y_offset), "Subtotal Parts:", fill="black", font=font_regular)
+    subtotal_parts = sum(i['total'] for i in bill_items)
+    draw.text((460, y_offset), f"Rs. {subtotal_parts:.2f}", fill="black", font=font_regular)
+    
+    if service_charge > 0:
+        y_offset += 30
+        draw.text((30, y_offset), "Service Charge:", fill="black", font=font_regular)
+        draw.text((460, y_offset), f"+ Rs. {service_charge:.2f}", fill="black", font=font_regular)
+        
+    if discount > 0:
+        y_offset += 30
+        draw.text((30, y_offset), "Discount Applied:", fill="black", font=font_regular)
+        draw.text((460, y_offset), f"- Rs. {discount:.2f}", fill="black", font=font_regular)
+        
+    draw.line([(30, y_offset + 30), (570, y_offset + 30)], fill="black", width=2)
     
     # Grand Total
-    draw.text((30, y_offset + 30), "GRAND TOTAL:", fill="black", font=font_title)
-    draw.text((420, y_offset + 30), f"Rs. {grand_total:.2f}", fill="black", font=font_title)
+    draw.text((30, y_offset + 50), "GRAND TOTAL:", fill="black", font=font_title)
+    draw.text((400, y_offset + 50), f"Rs. {final_total:.2f}", fill="black", font=font_title)
     
     # Footer
-    draw.line([(30, y_offset + 90), (570, y_offset + 90)], fill="gray", width=1)
-    draw.text((200, y_offset + 110), "Thank you for your business! 🙏", fill="black", font=font_bold)
+    draw.line([(30, y_offset + 110), (570, y_offset + 110)], fill="gray", width=1)
+    draw.text((200, y_offset + 130), "Thank you for your business! 🙏", fill="black", font=font_bold)
     
-    final_img = base_img.crop((0, 0, img_width, y_offset + 160))
+    final_img = base_img.crop((0, 0, img_width, y_offset + 180))
     
     buf = io.BytesIO()
     final_img.save(buf, format="PNG")
@@ -307,7 +322,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
 
     with tab4:
         st.subheader("Seema TVS Branded Invoice Generator")
-        st.caption("Select items, input customer contact info, download the branded receipt image, and open WhatsApp directly.")
+        st.caption("Select items, add service charges or discounts, input customer phone, and generate the image receipt.")
         
         col_b1, col_b2 = st.columns(2)
         with col_b1:
@@ -318,7 +333,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
         selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="img_bill_parts")
         
         bill_items = []
-        grand_total = 0.0
+        parts_total = 0.0
         
         if selected_billing_parts:
             st.markdown("### Item Quantities")
@@ -335,10 +350,18 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                     qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"img_qty_{part}")
                 
                 item_total = mrp * qty_sold
-                grand_total += item_total
+                parts_total += item_total
                 bill_items.append({"part": part, "desc": desc, "qty": qty_sold, "mrp": mrp, "total": item_total})
             
-            st.markdown(f"### **Grand Total: ₹{grand_total:.2f}**")
+            st.markdown("---")
+            col_add1, col_add2 = st.columns(2)
+            with col_add1:
+                service_charge = st.number_input("Service / Labor Charge (₹)", min_value=0.0, value=0.0, step=10.0)
+            with col_add2:
+                discount_val = st.number_input("Discount (₹)", min_value=0.0, value=0.0, step=10.0)
+                
+            final_grand_total = max(0.0, parts_total + service_charge - discount_val)
+            st.markdown(f"### **Final Grand Total: ₹{final_grand_total:.2f}**")
             
             if st.button("Deduct Stock & Generate Invoice"):
                 sale_success = True
@@ -357,7 +380,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                     save_data(df)
                     st.success("Sale completed and inventory updated in Google Sheet!")
                     
-                    receipt_buf = generate_receipt_image(cust_name, bill_items, grand_total)
+                    receipt_buf = generate_receipt_image(cust_name, bill_items, service_charge, discount_val, final_grand_total)
                     
                     st.markdown("### 📥 Invoice Preview & Actions")
                     st.image(receipt_buf, caption="Generated Seema TVS Branded Invoice", width=400)
@@ -372,7 +395,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                         )
                     
                     with col_d2:
-                        wa_msg = urllib.parse.quote(f"Hello {cust_name}, here is your bill receipt from Seema TVS Agency. Grand Total: ₹{grand_total:.2f}. Thank you for your business! 🙏")
+                        wa_msg = urllib.parse.quote(f"Hello {cust_name}, here is your bill receipt from Seema TVS Agency. Grand Total: ₹{final_grand_total:.2f}. Thank you for your business! 🙏")
                         wa_url = f"https://wa.me/{cust_phone}?text={wa_msg}" if cust_phone else f"https://wa.me/?text={wa_msg}"
                         st.markdown(f"👉 **[Click to Open WhatsApp Chat]({wa_url})**", unsafe_allow_html=True)
 else:
