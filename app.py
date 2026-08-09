@@ -25,25 +25,25 @@ def load_data():
     if not os.path.exists(CSV_FILE):
         return pd.DataFrame(columns=[
             'part_number', 'description', 'model', 
-            'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 
-            'max_capacity', 'units_sold'
+            'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold'
         ])
     df_loaded = pd.read_csv(CSV_FILE)
     
-    # Remove category column if it still exists in the CSV
-    if 'category' in df_loaded.columns:
-        df_loaded = df_loaded.drop(columns=['category'])
+    # Remove category and max_capacity columns if they still exist in the CSV
+    for col_to_drop in ['category', 'max_capacity']:
+        if col_to_drop in df_loaded.columns:
+            df_loaded = df_loaded.drop(columns=[col_to_drop])
         
     if 'units_sold' not in df_loaded.columns:
         df_loaded['units_sold'] = 0
     return df_loaded
 
 def save_data(df_to_save):
-    # Ensure category is dropped before saving if it snuck in
-    if 'category' in df_to_save.columns:
-        df_to_save = df_to_save.drop(columns=['category'])
+    for col_to_drop in ['category', 'max_capacity']:
+        if col_to_drop in df_to_save.columns:
+            df_to_save = df_to_save.drop(columns=[col_to_drop])
         
-    base_cols = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
+    base_cols = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
     for col in base_cols:
         if col not in df_to_save.columns:
             df_to_save[col] = 0
@@ -143,7 +143,6 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
     new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=0.0, step=1.0)
     new_qty = st.number_input("Initial Stock Quantity", min_value=0, value=1, step=1)
     new_min = st.number_input("Min Threshold (Reorder Level)", min_value=1, value=5, step=1)
-    new_max = st.number_input("Max Capacity", min_value=1, value=50, step=1)
     
     submit_new_part = st.form_submit_button("Add Part to Database")
     
@@ -161,7 +160,6 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
                 'unit_mrp': new_mrp,
                 'stock_qty': new_qty,
                 'min_threshold': new_min,
-                'max_capacity': new_max,
                 'units_sold': 0
             }])
             df = pd.concat([df, new_row], ignore_index=True)
