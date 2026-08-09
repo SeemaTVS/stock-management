@@ -26,25 +26,14 @@ st.title("TVS Agency Inventory & Order Management")
 CSV_FILE = "inventory.csv"
 
 def load_data():
-    uploaded_file = st.file_uploader("Upload your inventory CSV file", type=["csv"])
-    if uploaded_file is not None:
-        try:
-            df_loaded = pd.read_csv(uploaded_file)
-            if 'units_sold' not in df_loaded.columns:
-                df_loaded['units_sold'] = 0
-            return df_loaded
-        except Exception as e:
-            st.error(f"Error reading uploaded file: {e}")
-    
     try:
-        return pd.read_csv(CSV_FILE)
+        return pd.read_csv("inventory.csv")
     except Exception:
         return pd.DataFrame(columns=[
             'part_number', 'description', 'category', 'model', 
             'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 
             'max_capacity', 'units_sold'
         ])
-
 def save_data(df_to_save):
     base_cols = ['part_number', 'description', 'category', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'max_capacity', 'units_sold']
     for col in base_cols:
