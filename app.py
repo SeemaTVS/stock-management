@@ -4,10 +4,10 @@ import re
 import requests
 import io
 import time
+import os
 from PIL import Image, ImageDraw, ImageFont
 import pytesseract
 import shutil
-import urllib.parse
 
 # Automatically find Tesseract whether running locally or on Streamlit Cloud
 tesseract_path = shutil.which("tesseract")
@@ -22,10 +22,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.title("TVS Agency Inventory & Order Management")
+st.title("TVS Agency Inventory & Sales Management")
 
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM/edit?gid=0#gid=0"
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbymkbPavkWPw_5kFEN7S6KQTg2MvS_zqAmGXXkqBAjVDo7XrnUCj9GKKKrA_heBvWZvmQ/exec"
+SALES_FILE = "sales_log.csv"
 
 def get_csv_export_url(sheet_url):
     match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
@@ -35,6 +36,7 @@ def get_csv_export_url(sheet_url):
 
 CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
 EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+SALES_COLS = ['timestamp', 'customer_name', 'items_detail', 'parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit', 'month_year']
 
 def load_data():
     try:
@@ -83,7 +85,26 @@ def save_data(df_to_save):
     except Exception as e:
         st.sidebar.error(f"Float/Sync error: {e}")
 
+def load_sales_log():
+    if os.path.exists(SALES_FILE):
+        try:
+            sales_df = pd.read_csv(SALES_FILE)
+            for col in SALES_COLS:
+                if col not in sales_df.columns:
+                    sales_df[col] = ""
+            return sales_df
+        except Exception:
+            return pd.DataFrame(columns=SALES_COLS)
+    return pd.DataFrame(columns=SALES_COLS)
+
+def save_sales_log(sales_df):
+    try:
+        sales_df.to_csv(SALES_FILE, index=False)
+    except Exception as e:
+        st.error(f"Error saving sales log: {e}")
+
 df = load_data()
+sales_df = load_sales_log()
 
 # Smart OCR Parser: Extracts Part Number, Description, and MRP from TVS Label
 def parse_tvs_label(scanned_text):
@@ -100,24 +121,23 @@ def parse_tvs_label(scanned_text):
     for line in cleaned_lines:
         line_upper = line.upper()
         
-        # 1. Extract Part Number (e.g. NF040370)
+        # 1. Extract Part Number
         if not part_no:
             match_pn = re.search(r'\b[A-Z]{2}\d{6}\b', line_upper)
             if match_pn:
                 part_no = match_pn.group(0)
         
-        # 2. Extract MRP (e.g. MRP Rs. 298.00 or 298.00)
+        # 2. Extract MRP
         if mrp_val == 0.0 and ("MRP" in line_upper or "RS" in line_upper):
             match_mrp = re.findall(r'(\d+\.\d{2})', line)
             if match_mrp:
-                mrp_val = float(match_mrp[-1]) # Usually last decimal in MRP line
+                mrp_val = float(match_mrp[-1])
                 
-        # 3. Extract Description (Usually contains words like COMP, FILTER, KIT, etc. or appears in capital letters mid-label)
+        # 3. Extract Description
         if not description:
             if any(keyword in line_upper for keyword in ["COMP", "FILTER", "KIT", "ASSY", "CABLE", "PAD", "SHOE", "VALVE", "GEAR"]):
                 description = line.strip()
 
-    # Fallback search if description wasn't caught by keywords
     if not description and len(cleaned_lines) > 2:
         for line in cleaned_lines:
             if len(line) > 5 and not any(w in line.upper() for w in ["MRP", "NET", "QUANTITY", "MANUFACTURED", "TVS", "TAXES"]):
@@ -125,7 +145,6 @@ def parse_tvs_label(scanned_text):
                     description = line.strip()
                     break
 
-    # Fallback MRP check if missed
     if mrp_val == 0.0:
         for line in cleaned_lines:
             match_all_nums = re.findall(r'(\d+\.\d{2})', line)
@@ -134,91 +153,6 @@ def parse_tvs_label(scanned_text):
                 break
 
     return part_no, description, mrp_val
-
-# Branded Invoice Image Generator
-def generate_receipt_image(cust_name, bill_items, service_charge, discount, final_total):
-    img_width, img_height = 600, 950
-    base_img = Image.new("RGB", (img_width, img_height), color="white")
-    
-    txt_layer = Image.new("RGBA", base_img.size, (255, 255, 255, 0))
-    try:
-        font_wm = ImageFont.truetype("arial.ttf", 60)
-        font_logo = ImageFont.truetype("arial.ttf", 40)
-    except IOError:
-        font_wm = ImageFont.load_default()
-        font_logo = ImageFont.load_default()
-
-    draw_wm = ImageDraw.Draw(txt_layer)
-    draw_wm.text((120, 320), "SEEMA TVS", fill=(180, 200, 230, 130), font=font_logo)
-    
-    rotated_txt = txt_layer.rotate(25, expand=1)
-    base_img.paste(rotated_txt, (-50, -50), rotated_txt)
-
-    draw = ImageDraw.Draw(base_img)
-    
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 26)
-        font_header = ImageFont.truetype("arial.ttf", 16)
-        font_bold = ImageFont.truetype("arial.ttf", 14)
-        font_regular = ImageFont.truetype("arial.ttf", 14)
-    except IOError:
-        font_title = ImageFont.load_default()
-        font_header = ImageFont.load_default()
-        font_bold = ImageFont.load_default()
-        font_regular = ImageFont.load_default()
-
-    draw.text((180, 30), "SEEMA TVS AGENCY", fill="black", font=font_title)
-    draw.text((210, 65), "Official Spare Parts Bill", fill="gray", font=font_header)
-    draw.line([(30, 100), (570, 100)], fill="black", width=2)
-    
-    draw.text((30, 120), f"Customer Name: {cust_name}", fill="black", font=font_bold)
-    draw.text((30, 145), f"Date: {pd.Timestamp.now().strftime('%d-%m-%Y %H:%M')}", fill="black", font=font_regular)
-    draw.line([(30, 175), (570, 175)], fill="gray", width=1)
-    
-    draw.text((30, 190), "Part # / Description", fill="black", font=font_bold)
-    draw.text((380, 190), "Qty", fill="black", font=font_bold)
-    draw.text((460, 190), "Amount", fill="black", font=font_bold)
-    draw.line([(30, 215), (570, 215)], fill="black", width=1)
-    
-    y_offset = 230
-    for item in bill_items:
-        draw.text((30, y_offset), f"{item['part']}", fill="black", font=font_bold)
-        draw.text((30, y_offset + 20), f"{item['desc']}", fill="gray", font=font_regular)
-        draw.text((380, y_offset + 10), f"{item['qty']}", fill="black", font=font_regular)
-        draw.text((460, y_offset + 10), f"Rs. {item['total']:.2f}", fill="black", font=font_regular)
-        y_offset += 60
-        
-    draw.line([(30, y_offset + 10), (570, y_offset + 10)], fill="black", width=1)
-    
-    y_offset += 20
-    draw.text((30, y_offset), "Subtotal Parts:", fill="black", font=font_regular)
-    subtotal_parts = sum(i['total'] for i in bill_items)
-    draw.text((460, y_offset), f"Rs. {subtotal_parts:.2f}", fill="black", font=font_regular)
-    
-    if service_charge > 0:
-        y_offset += 30
-        draw.text((30, y_offset), "Service Charge:", fill="black", font=font_regular)
-        draw.text((460, y_offset), f"+ Rs. {service_charge:.2f}", fill="black", font=font_regular)
-        
-    if discount > 0:
-        y_offset += 30
-        draw.text((30, y_offset), "Discount Applied:", fill="black", font=font_regular)
-        draw.text((460, y_offset), f"- Rs. {discount:.2f}", fill="black", font=font_regular)
-        
-    draw.line([(30, y_offset + 30), (570, y_offset + 30)], fill="black", width=2)
-    
-    draw.text((30, y_offset + 50), "GRAND TOTAL:", fill="black", font=font_title)
-    draw.text((400, y_offset + 50), f"Rs. {final_total:.2f}", fill="black", font=font_title)
-    
-    draw.line([(30, y_offset + 110), (570, y_offset + 110)], fill="gray", width=1)
-    draw.text((200, y_offset + 130), "Thank you for your business! 🙏", fill="black", font=font_bold)
-    
-    final_img = base_img.crop((0, 0, img_width, y_offset + 180))
-    
-    buf = io.BytesIO()
-    final_img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("📷 Label Scanner")
@@ -242,14 +176,13 @@ if uploaded_photo:
 
 st.sidebar.markdown("---")
 
-# 1. ADD NEW PART (Auto-filled with Scanner data & 16% unit cost formula)
+# 1. ADD NEW PART
 st.sidebar.header("➕ Add New Part")
 with st.sidebar.form("add_part_form", clear_on_submit=True):
     new_part_no = st.text_input("Part Number", value=scanned_part)
     new_desc = st.text_input("Description", value=scanned_desc)
     new_model = st.text_input("Model", value="Universal")
     
-    # Auto formula: Unit Cost = MRP - 16%
     default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
     new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
     default_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
@@ -281,7 +214,7 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
 
 st.sidebar.markdown("---")
 
-# 2. MANUAL STOCK ADJUSTMENT (At the bottom)
+# 2. MANUAL STOCK ADJUSTMENT
 st.sidebar.header("⚙️ Manual Stock Adjustment")
 if not df.empty and 'part_number' in df.columns:
     part_options = df['part_number'].unique()
@@ -320,10 +253,11 @@ if not df.empty:
 
     df['status'] = df.apply(calculate_status, axis=1)
 
-    tab1, tab2, tab3 = st.tabs([
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📊 Overview & Stock", 
         "✏️ Edit Master Data", 
-        "📱 Seema TVS Billing"
+        "🛒 Record Sale",
+        "📈 Sales & Profit Reports"
     ])
 
     with tab1:
@@ -339,37 +273,44 @@ if not df.empty:
             st.rerun()
 
     with tab3:
-        st.subheader("Seema TVS Branded Invoice Generator")
-        st.caption("Select items, apply service charges or discounts, generate the branded receipt image, and send it over WhatsApp.")
+        st.subheader("Record New Sale Transaction")
+        st.caption("Select sold items, apply service charges or discounts, and complete checkout to update inventory and sales reports.")
         
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            cust_name = st.text_input("Customer Name", value="Customer")
-        with col_b2:
-            cust_phone = st.text_input("Customer WhatsApp Number (with country code, e.g., 919876543210)", value="")
-
-        selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="img_bill_parts")
+        cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
+        selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="sale_parts_select")
         
         bill_items = []
-        parts_total = 0.0
+        parts_mrp_total = 0.0
+        parts_cost_total = 0.0
         
         if selected_billing_parts:
-            st.markdown("### Item Quantities")
+            st.markdown("### Sold Quantities")
             for part in selected_billing_parts:
                 row_data = df[df['part_number'] == part].iloc[0]
                 desc = row_data['description']
                 mrp = float(row_data['unit_mrp'])
+                cost = float(row_data['unit_cost'])
                 avail_qty = int(row_data['stock_qty'])
                 
                 col_q1, col_q2 = st.columns([3, 1])
                 with col_q1:
-                    st.write(f"**{part}** - {desc} (MRP: ₹{mrp}) | Stock: {avail_qty}")
+                    st.write(f"**{part}** - {desc} (MRP: ₹{mrp} | Cost: ₹{cost}) | Stock: {avail_qty}")
                 with col_q2:
-                    qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"img_qty_{part}")
+                    qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"sale_qty_{part}")
                 
-                item_total = mrp * qty_sold
-                parts_total += item_total
-                bill_items.append({"part": part, "desc": desc, "qty": qty_sold, "mrp": mrp, "total": item_total})
+                item_mrp_sum = mrp * qty_sold
+                item_cost_sum = cost * qty_sold
+                parts_mrp_total += item_mrp_sum
+                parts_cost_total += item_cost_sum
+                bill_items.append({
+                    "part": part, 
+                    "desc": desc, 
+                    "qty": qty_sold, 
+                    "mrp": mrp, 
+                    "cost": cost,
+                    "mrp_total": item_mrp_sum,
+                    "cost_total": item_cost_sum
+                })
             
             st.markdown("---")
             col_add1, col_add2 = st.columns(2)
@@ -378,10 +319,18 @@ if not df.empty:
             with col_add2:
                 discount_val = st.number_input("Discount (₹)", min_value=0.0, value=0.0, step=10.0)
                 
-            final_grand_total = max(0.0, parts_total + service_charge - discount_val)
-            st.markdown(f"### **Final Grand Total: ₹{final_grand_total:.2f}**")
+            final_grand_total = max(0.0, parts_mrp_total + service_charge - discount_val)
+            expected_net_profit = final_grand_total - parts_cost_total
             
-            if st.button("Deduct Stock & Generate Invoice"):
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                st.metric("Parts Total (MRP)", f"₹{parts_mrp_total:.2f}")
+            with col_p2:
+                st.metric("Grand Total (Sale Price)", f"₹{final_grand_total:.2f}")
+            with col_p3:
+                st.metric("Net Profit", f"₹{expected_net_profit:.2f}")
+            
+            if st.button("Complete Checkout & Record Sale", type="primary"):
                 sale_success = True
                 for item in bill_items:
                     p_no = item["part"]
@@ -396,24 +345,86 @@ if not df.empty:
                 
                 if sale_success:
                     save_data(df)
-                    st.success("Sale completed and inventory updated in Google Sheet!")
                     
-                    receipt_buf = generate_receipt_image(cust_name, bill_items, service_charge, discount_val, final_grand_total)
+                    # Record transaction to sales log
+                    now_stamp = pd.Timestamp.now()
+                    items_summary = "; ".join([f"{i['part']} ({i['desc']}) x{i['qty']}" for i in bill_items])
                     
-                    st.markdown("### 📥 Download Branded Receipt Image")
-                    st.image(receipt_buf, caption="Generated Seema TVS Branded Invoice", width=400)
+                    new_sale_entry = pd.DataFrame([{
+                        'timestamp': now_stamp.strftime('%Y-%m-%d %H:%M:%S'),
+                        'customer_name': cust_name.strip(),
+                        'items_detail': items_summary,
+                        'parts_total': float(parts_mrp_total),
+                        'service_charge': float(service_charge),
+                        'discount': float(discount_val),
+                        'grand_total': float(final_grand_total),
+                        'total_cost': float(parts_cost_total),
+                        'net_profit': float(expected_net_profit),
+                        'month_year': now_stamp.strftime('%Y-%m')
+                    }])
                     
-                    st.download_button(
-                        label="Download Invoice Image (PNG)",
-                        data=receipt_buf,
-                        file_name=f"Seema_TVS_Invoice_{cust_name}.png",
-                        mime="image/png"
-                    )
+                    sales_df = pd.concat([sales_df, new_sale_entry], ignore_index=True)
+                    save_sales_log(sales_df)
                     
-                    wa_text = f"*--- 📋 SEEMA TVS INVOICE ---*\n*Customer:* {cust_name}\n*Total:* ₹{final_grand_total:.2f}\n🙏 Thank you for choosing Seema TVS!"
-                    encoded_wa = urllib.parse.quote(wa_text)
-                    wa_link = f"https://wa.me/{cust_phone}?text={encoded_wa}" if cust_phone else f"https://wa.me/?text={encoded_wa}"
-                    
-                    st.markdown(f"👉 **[Click to Open WhatsApp]({wa_link})**", unsafe_allow_html=True)
+                    st.success("Sale completed! Inventory updated and transaction saved to reports.")
+                    time.sleep(1)
+                    st.rerun()
+
+    with tab4:
+        st.subheader("Sales Performance & Monthly Profit Reports")
+        
+        if not sales_df.empty:
+            num_cols_s = ['parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit']
+            for col in num_cols_s:
+                sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
+
+            # Month Selector Filter
+            months = ["All Months"] + sorted(sales_df['month_year'].astype(str).unique().tolist(), reverse=True)
+            selected_month = st.selectbox("Select Reporting Month", months)
+            
+            if selected_month != "All Months":
+                filtered_sales = sales_df[sales_df['month_year'] == selected_month]
+            else:
+                filtered_sales = sales_df.copy()
+                
+            st.markdown("---")
+            
+            # High-level Metrics
+            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            with m_col1:
+                st.metric("Total Transactions", len(filtered_sales))
+            with m_col2:
+                st.metric("Total Revenue (Sales)", f"₹{filtered_sales['grand_total'].sum():,.2f}")
+            with m_col3:
+                st.metric("Total Costs", f"₹{filtered_sales['total_cost'].sum():,.2f}")
+            with m_col4:
+                st.metric("Net Profit", f"₹{filtered_sales['net_profit'].sum():,.2f}")
+
+            st.markdown("---")
+            st.markdown("### Transaction Log & Details")
+            
+            # Export sales records
+            csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Export Selected Sales Data (CSV)",
+                data=csv_data,
+                file_name=f"Sales_Report_{selected_month}.csv",
+                mime="text/csv"
+            )
+            
+            st.dataframe(
+                filtered_sales[['timestamp', 'customer_name', 'items_detail', 'grand_total', 'total_cost', 'net_profit', 'month_year']],
+                use_container_width=True
+            )
+            
+            with st.expander("🔍 View Detailed Line-by-Line Transactions"):
+                for idx, row in filtered_sales.iloc[::-1].iterrows():
+                    st.markdown(f"**Date:** {row['timestamp']} | **Customer:** {row['customer_name']} | **Month:** {row['month_year']}")
+                    st.write(f"**Items:** {row['items_detail']}")
+                    st.write(f"Parts Subtotal: ₹{row['parts_total']:.2f} | Service: +₹{row['service_charge']:.2f} | Discount: -₹{row['discount']:.2f}")
+                    st.write(f"**Grand Total:** ₹{row['grand_total']:.2f} | **Unit Costs:** ₹{row['total_cost']:.2f} | **Profit:** ₹{row['net_profit']:.2f}")
+                    st.divider()
+        else:
+            st.info("No sales recorded yet. Use the 'Record Sale' tab to log your first transaction!")
 else:
     st.info("Your inventory database is currently empty.")
