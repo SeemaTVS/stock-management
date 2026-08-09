@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import requests
 import io
+import time
 
 st.set_page_config(
     page_title="TVS Agency Inventory Dashboard", 
@@ -26,10 +27,8 @@ EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp',
 
 def load_data():
     try:
-        import time
-        # Add a timestamp to bypass Google Sheets CSV export caching
         cache_buster = int(time.time())
-        fresh_url = f"{CSV_EXPORT_URL}&t={cache_buster}"
+        fresh_url = f"{CSV_EXPORT_URL}&cb={cache_buster}"
         
         df_loaded = pd.read_csv(fresh_url)
         for col in EXPECTED_COLS:
@@ -37,11 +36,13 @@ def load_data():
                 df_loaded[col] = ""
         if 'units_sold' not in df_loaded.columns:
             df_loaded['units_sold'] = 0
-        return df_loaded.dropna(subset=['part_number'])
+            
+        df_loaded = df_loaded.dropna(subset=['part_number'])
+        return df_loaded
     except Exception as e:
         st.error(f"Load error: {e}")
         return pd.DataFrame(columns=EXPECTED_COLS)
-        
+
 def save_data(df_to_save):
     for col in EXPECTED_COLS:
         if col not in df_to_save.columns:
@@ -49,14 +50,14 @@ def save_data(df_to_save):
             
     if WEB_APP_URL:
         try:
-            with st.spinner("Syncing changes..."):
+            with st.spinner("Syncing changes to Google Sheet..."):
                 data_dict = df_to_save[EXPECTED_COLS].to_dict(orient="records")
                 response = requests.post(WEB_APP_URL, json=data_dict, timeout=15)
                 
             if response.status_code == 200:
-                st.sidebar.success("Successfully synced to Google Sheet!")
+                st.sidebar.success("Successfully synced!")
             else:
-                st.sidebar.error(f"Sync failed with status: {response.status_code}")
+                st.sidebar.error(f"Sync failed: {response.status_code}")
         except Exception as e:
             st.sidebar.error(f"Sync error: {e}")
 
@@ -75,6 +76,7 @@ if not df.empty and 'part_number' in df.columns:
             if st.sidebar.button("Add Stock"):
                 df.loc[df['part_number'] == selected_part, 'stock_qty'] += qty_change
                 save_data(df)
+                time.sleep(1)
                 st.rerun()
         with col2:
             if st.sidebar.button("Record Sale"):
@@ -83,6 +85,7 @@ if not df.empty and 'part_number' in df.columns:
                     df.loc[df['part_number'] == selected_part, 'stock_qty'] -= qty_change
                     df.loc[df['part_number'] == selected_part, 'units_sold'] += qty_change
                     save_data(df)
+                    time.sleep(1)
                     st.rerun()
                 else:
                     st.sidebar.error("Insufficient stock!")
@@ -93,10 +96,10 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
     new_part_no = st.text_input("Part Number")
     new_desc = st.text_input("Description")
     new_model = st.text_input("Model", value="Universal")
-    new_cost = st.number_input("Unit Cost (₹)", min_value=0.0, value=0.0)
-    new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=0.0)
-    new_qty = st.number_input("Initial Stock", min_value=0, value=1)
-    new_min = st.number_input("Min Threshold", min_value=1, value=5)
+    new_cost = st.number_input("Unit Cost (₹)", min_value=0.0, value=0.0, step=1.0)
+    new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=0.0, step=1.0)
+    new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
+    new_min = st.number_input("Min Threshold", min_value=1, value=5, step=1)
     
     submit_new_part = st.form_submit_button("Add to Database")
     
@@ -116,6 +119,7 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
             }])
             df = pd.concat([df, new_row], ignore_index=True)
             save_data(df)
+            time.sleep(1)
             st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
@@ -141,6 +145,7 @@ if not df.empty:
         edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
         if st.button("Save Changes to Google Sheet"):
             save_data(edited_df)
+            time.sleep(1)
             st.rerun()
 else:
     st.info("Your inventory database is currently empty.")
