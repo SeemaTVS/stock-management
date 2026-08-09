@@ -2,10 +2,11 @@ import streamlit as st
 import pandas as pd
 import re
 import os
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import pytesseract
 import shutil
 import requests
+import io
 import urllib.parse
 
 # Automatically find Tesseract whether running on Windows or Streamlit Cloud
@@ -94,6 +95,77 @@ def extract_part_number(scanned_text):
         return matches[0]
         
     return cleaned
+
+# Helper function to generate receipt image with Seema TVS branding
+def generate_receipt_image(cust_name, bill_items, grand_total):
+    img_width, img_height = 600, 800
+    base_img = Image.new("RGB", (img_width, img_height), color="white")
+    draw = ImageDraw.Draw(base_img)
+    
+    # Try loading a standard font, fallback to default if unavailable
+    try:
+        font_title = ImageFont.truetype("arial.ttf", 26)
+        font_header = ImageFont.truetype("arial.ttf", 16)
+        font_bold = ImageFont.truetype("arial.ttf", 14)
+        font_regular = ImageFont.truetype("arial.ttf", 14)
+    except IOError:
+        font_title = ImageFont.load_default()
+        font_header = ImageFont.load_default()
+        font_bold = ImageFont.load_default()
+        font_regular = ImageFont.load_default()
+
+    # Draw Watermark Branding "SEEMA TVS" in background
+    try:
+        font_wm = ImageFont.truetype("arial.ttf", 60)
+    except IOError:
+        font_wm = ImageFont.load_default()
+    
+    # Draw faint background watermark
+    draw.text((80, 300), "SEEMA TVS", fill=(230, 230, 230), font=font_wm)
+
+    # Header Details
+    draw.text((180, 30), "SEEMA TVS AGENCY", fill="black", font=font_title)
+    draw.text((210, 65), "Official Spare Parts Bill", fill="gray", font=font_header)
+    draw.line([(30, 100), (570, 100)], fill="black", width=2)
+    
+    # Customer Info
+    draw.text((30, 120), f"Customer Name: {cust_name}", fill="black", font=font_bold)
+    draw.text((30, 145), f"Date: {pd.Timestamp.now().strftime('%d-%m-%Y %H:%M')}", fill="black", font=font_regular)
+    draw.line([(30, 175), (570, 175)], fill="gray", width=1)
+    
+    # Table Headers
+    draw.text((30, 190), "Part # / Description", fill="black", font=font_bold)
+    draw.text((380, 190), "Qty", fill="black", font=font_bold)
+    draw.text((460, 190), "Amount", fill="black", font=font_bold)
+    draw.line([(30, 215), (570, 215)], fill="black", width=1)
+    
+    # Item Rows
+    y_offset = 230
+    for item in bill_items:
+        draw.text((30, y_offset), f"{item['part']}", fill="black", font=font_bold)
+        draw.text((30, y_offset + 20), f"{item['desc']}", fill="gray", font=font_regular)
+        draw.text((380, y_offset + 10), f"{item['qty']}", fill="black", font=font_regular)
+        draw.text((460, y_offset + 10), f"Rs. {item['total']:.2f}", fill="black", font=font_regular)
+        y_offset += 60
+        
+    draw.line([(30, y_offset + 10), (570, y_offset + 10)], fill="black", width=2)
+    
+    # Grand Total
+    draw.text((30, y_offset + 30), "GRAND TOTAL:", fill="black", font=font_title)
+    draw.text((420, y_offset + 30), f"Rs. {grand_total:.2f}", fill="black", font=font_title)
+    
+    # Footer
+    draw.line([(30, y_offset + 90), (570, y_offset + 90)], fill="gray", width=1)
+    draw.text((200, y_offset + 110), "Thank you for your business! 🙏", fill="black", font=font_bold)
+    
+    # Crop image height dynamically to content size
+    final_img = base_img.crop((0, 0, img_width, y_offset + 160))
+    
+    # Convert image to bytes buffer
+    buf = io.BytesIO()
+    final_img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
 
 # --- SIDEBAR CONTROLS ---
 
@@ -203,7 +275,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
         "📊 Overview & Stock", 
         "✏️ Edit Master Data", 
         "🚨 Reorder Alerts", 
-        "📱 WhatsApp Billing"
+        "📱 Seema TVS Billing"
     ])
 
     with tab1:
@@ -227,22 +299,17 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
             st.success("All inventory levels are healthy!")
 
     with tab4:
-        st.subheader("Quick Billing & WhatsApp Invoice Generator")
-        st.caption("Select items sold, enter customer details, and generate a formatted text invoice to send directly via WhatsApp.")
+        st.subheader("Seema TVS Image Invoice Generator")
+        st.caption("Select items sold to instantly create a branded image receipt with Seema TVS background watermark for WhatsApp sharing.")
         
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            cust_name = st.text_input("Customer Name", value="Customer")
-        with col_c2:
-            cust_phone = st.text_input("Customer WhatsApp Number (with country code, e.g., 919876543210)", value="")
-
-        selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist())
+        cust_name = st.text_input("Customer Name", value="Customer")
+        selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="img_bill_parts")
         
         bill_items = []
         grand_total = 0.0
         
         if selected_billing_parts:
-            st.markdown("### Invoice Itemized Breakdown")
+            st.markdown("### Item Quantities")
             for part in selected_billing_parts:
                 row_data = df[df['part_number'] == part].iloc[0]
                 desc = row_data['description']
@@ -253,7 +320,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                 with col_q1:
                     st.write(f"**{part}** - {desc} (MRP: ₹{mrp}) | Stock: {avail_qty}")
                 with col_q2:
-                    qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"bill_qty_{part}")
+                    qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"img_qty_{part}")
                 
                 item_total = mrp * qty_sold
                 grand_total += item_total
@@ -261,8 +328,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
             
             st.markdown(f"### **Grand Total: ₹{grand_total:.2f}**")
             
-            if st.button("Complete Sale & Generate WhatsApp Message"):
-                # Deduct stock and update units sold
+            if st.button("Deduct Stock & Generate Invoice Image"):
                 sale_success = True
                 for item in bill_items:
                     p_no = item["part"]
@@ -273,28 +339,22 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                         df.loc[df['part_number'] == p_no, 'units_sold'] += q_sold
                     else:
                         st.error(f"Error: Not enough stock for {p_no}!")
-                        sale_success = false
+                        sale_success = False
                 
                 if sale_success:
                     save_data(df)
-                    st.success("Sale recorded and inventory updated in Google Sheet!")
+                    st.success("Sale completed and inventory updated in Google Sheet!")
                     
-                    # Build WhatsApp formatted text message
-                    wa_text = f"*TVS AGENCY - INVOICE*\n"
-                    wa_text += f"--------------------------------\n"
-                    wa_text += f"Customer: {cust_name}\n"
-                    wa_text += f"--------------------------------\n"
-                    for itm in bill_items:
-                        wa_text += f"• {itm['part']} ({itm['desc']}) x {itm['qty']} = ₹{itm['total']:.2f}\n"
-                    wa_text += f"--------------------------------\n"
-                    wa_text += f"*TOTAL AMOUNT: ₹{grand_total:.2f}*\n"
-                    wa_text += f"Thank you for your business! 🙏\n"
+                    # Generate the receipt image
+                    receipt_buf = generate_receipt_image(cust_name, bill_items, grand_total)
                     
-                    encoded_message = urllib.parse.quote(wa_text)
-                    wa_link = f"https://wa.me/{cust_phone}?text={encoded_message}" if cust_phone else f"https://wa.me/?text={encoded_message}"
-                    
-                    st.markdown("### Ready to Send:")
-                    st.markdown(f"👉 **[Click here to open WhatsApp with Invoice]({wa_link})**", unsafe_allow_html=True)
-                    st.text_area("Or copy text manually:", value=wa_text, height=150)
+                    st.markdown("### 📥 Download Branded Receipt Image")
+                    st.image(receipt_buf, caption="Generated Seema TVS Invoice", width=400)
+                    st.download_button(
+                        label="Download Invoice Image (PNG)",
+                        data=receipt_buf,
+                        file_name=f"Seema_TVS_Invoice_{cust_name}.png",
+                        mime="image/png"
+                    )
 else:
     st.info("Your inventory database is currently empty. Use the sidebar on the left to add your first part!")
