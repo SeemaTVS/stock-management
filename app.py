@@ -33,25 +33,32 @@ def get_csv_export_url(sheet_url):
 
 CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
 
-# 1. Load Data from Google Sheets
+EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+
+# 1. Load Data Safely from Google Sheets
 def load_data():
     try:
         df_loaded = pd.read_csv(CSV_EXPORT_URL)
         for col_to_drop in ['category', 'max_capacity']:
             if col_to_drop in df_loaded.columns:
                 df_loaded = df_loaded.drop(columns=[col_to_drop])
+        
+        # Check if required columns exist, otherwise reset to empty template
+        for col in EXPECTED_COLS:
+            if col not in df_loaded.columns:
+                return pd.DataFrame(columns=EXPECTED_COLS)
+                
         if 'units_sold' not in df_loaded.columns:
             df_loaded['units_sold'] = 0
+            
+        # Drop rows where part_number is completely empty/NaN
+        df_loaded = df_loaded.dropna(subset=['part_number'])
         return df_loaded
-    except Exception as e:
-        st.error(f"Could not load from Google Sheet. Make sure the link is public (Anyone with the link can view/edit). Error: {e}")
-        return pd.DataFrame(columns=[
-            'part_number', 'description', 'model', 
-            'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold'
-        ])
+    except Exception:
+        return pd.DataFrame(columns=EXPECTED_COLS)
 
 def save_data(df_to_save):
-    st.success("Changes processed locally! Download the backup file below to paste straight into your Google Sheet if needed.")
+    st.success("Changes processed locally! Download the backup file below if you want to sync it back to your Google Sheet.")
 
 df = load_data()
 
@@ -96,7 +103,7 @@ default_new_part = ""
 if active_part:
     st.sidebar.info(f"Detected Part: **{active_part}**")
     
-    if not df.empty and active_part in df['part_number'].values:
+    if not df.empty and 'part_number' in df.columns and active_part in df['part_number'].values:
         if st.sidebar.button("Add +1 to Stock"):
             df.loc[df['part_number'] == active_part, 'stock_qty'] += 1
             save_data(df)
@@ -108,7 +115,9 @@ if active_part:
 st.sidebar.markdown("---")
 
 st.sidebar.header("⚙️ Manual Stock Adjustment")
-selected_part = st.sidebar.selectbox("Select Part to Update", df['part_number'].unique() if not df.empty else [])
+part_options = df['part_number'].unique() if not df.empty and 'part_number' in df.columns else []
+selected_part = st.sidebar.selectbox("Select Part to Update", part_options)
+
 if selected_part:
     qty_change = st.sidebar.number_input("Quantity Change (+ or -)", value=1, step=1)
     col1, col2 = st.sidebar.columns(2)
@@ -145,7 +154,7 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
     if submit_new_part:
         if not new_part_no:
             st.sidebar.error("Part Number is required!")
-        elif not df.empty and new_part_no in df['part_number'].values:
+        elif not df.empty and 'part_number' in df.columns and new_part_no in df['part_number'].values:
             st.sidebar.error("Part Number already exists!")
         else:
             new_row = pd.DataFrame([{
@@ -163,7 +172,7 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
             st.rerun()
 
 # --- MAIN DASHBOARD TABS ---
-if not df.empty:
+if not df.empty and 'part_number' in df.columns and len(df) > 0:
     def calculate_status(row):
         if row['stock_qty'] == 0:
             return "OUT OF STOCK"
@@ -207,4 +216,4 @@ if not df.empty:
         else:
             st.success("All inventory levels are healthy!")
 else:
-    st.info("Waiting for data to load from your Google Sheet link...")
+    st.info("Your inventory database is currently empty. Use the sidebar on the left to add your first part!")
