@@ -6,6 +6,7 @@ from PIL import Image
 import pytesseract
 import shutil
 import requests
+import urllib.parse
 
 # Automatically find Tesseract whether running on Windows or Streamlit Cloud
 tesseract_path = shutil.which("tesseract")
@@ -198,7 +199,12 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
 
     df['status'] = df.apply(calculate_status, axis=1)
 
-    tab1, tab2, tab3 = st.tabs(["📊 Overview & Stock", "✏️ Edit Inventory Data", "🚨 Reorder Alerts"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Overview & Stock", 
+        "✏️ Edit Master Data", 
+        "🚨 Reorder Alerts", 
+        "📱 WhatsApp Billing"
+    ])
 
     with tab1:
         st.subheader("Current Stock Inventory")
@@ -219,5 +225,76 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
             st.dataframe(low_stock[['part_number', 'description', 'stock_qty', 'min_threshold', 'status']], use_container_width=True)
         else:
             st.success("All inventory levels are healthy!")
+
+    with tab4:
+        st.subheader("Quick Billing & WhatsApp Invoice Generator")
+        st.caption("Select items sold, enter customer details, and generate a formatted text invoice to send directly via WhatsApp.")
+        
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            cust_name = st.text_input("Customer Name", value="Customer")
+        with col_c2:
+            cust_phone = st.text_input("Customer WhatsApp Number (with country code, e.g., 919876543210)", value="")
+
+        selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist())
+        
+        bill_items = []
+        grand_total = 0.0
+        
+        if selected_billing_parts:
+            st.markdown("### Invoice Itemized Breakdown")
+            for part in selected_billing_parts:
+                row_data = df[df['part_number'] == part].iloc[0]
+                desc = row_data['description']
+                mrp = float(row_data['unit_mrp'])
+                avail_qty = int(row_data['stock_qty'])
+                
+                col_q1, col_q2 = st.columns([3, 1])
+                with col_q1:
+                    st.write(f"**{part}** - {desc} (MRP: ₹{mrp}) | Stock: {avail_qty}")
+                with col_q2:
+                    qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"bill_qty_{part}")
+                
+                item_total = mrp * qty_sold
+                grand_total += item_total
+                bill_items.append({"part": part, "desc": desc, "qty": qty_sold, "mrp": mrp, "total": item_total})
+            
+            st.markdown(f"### **Grand Total: ₹{grand_total:.2f}**")
+            
+            if st.button("Complete Sale & Generate WhatsApp Message"):
+                # Deduct stock and update units sold
+                sale_success = True
+                for item in bill_items:
+                    p_no = item["part"]
+                    q_sold = item["qty"]
+                    current_stock = df.loc[df['part_number'] == p_no, 'stock_qty'].values[0]
+                    if current_stock >= q_sold:
+                        df.loc[df['part_number'] == p_no, 'stock_qty'] -= q_sold
+                        df.loc[df['part_number'] == p_no, 'units_sold'] += q_sold
+                    else:
+                        st.error(f"Error: Not enough stock for {p_no}!")
+                        sale_success = false
+                
+                if sale_success:
+                    save_data(df)
+                    st.success("Sale recorded and inventory updated in Google Sheet!")
+                    
+                    # Build WhatsApp formatted text message
+                    wa_text = f"*TVS AGENCY - INVOICE*\n"
+                    wa_text += f"--------------------------------\n"
+                    wa_text += f"Customer: {cust_name}\n"
+                    wa_text += f"--------------------------------\n"
+                    for itm in bill_items:
+                        wa_text += f"• {itm['part']} ({itm['desc']}) x {itm['qty']} = ₹{itm['total']:.2f}\n"
+                    wa_text += f"--------------------------------\n"
+                    wa_text += f"*TOTAL AMOUNT: ₹{grand_total:.2f}*\n"
+                    wa_text += f"Thank you for your business! 🙏\n"
+                    
+                    encoded_message = urllib.parse.quote(wa_text)
+                    wa_link = f"https://wa.me/{cust_phone}?text={encoded_message}" if cust_phone else f"https://wa.me/?text={encoded_message}"
+                    
+                    st.markdown("### Ready to Send:")
+                    st.markdown(f"👉 **[Click here to open WhatsApp with Invoice]({wa_link})**", unsafe_allow_html=True)
+                    st.text_area("Or copy text manually:", value=wa_text, height=150)
 else:
     st.info("Your inventory database is currently empty. Use the sidebar on the left to add your first part!")
