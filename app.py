@@ -5,7 +5,7 @@ import requests
 import io
 import time
 import os
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import pytesseract
 import shutil
 
@@ -156,61 +156,86 @@ def parse_tvs_label(scanned_text):
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("📷 Label Scanner")
-uploaded_photo = st.sidebar.file_uploader("Snap/Upload Part Sticker", type=["jpg", "jpeg", "png"])
+scanner_mode = st.sidebar.radio("Input Method", ["Live Camera Snap", "Upload Image File"])
+
+scanned_img_file = None
+if scanner_mode == "Live Camera Snap":
+    scanned_img_file = st.sidebar.camera_input("Snap Part Sticker")
+else:
+    scanned_img_file = st.sidebar.file_uploader("Upload Sticker Image", type=["jpg", "jpeg", "png"])
 
 scanned_part = ""
 scanned_desc = ""
 scanned_mrp = 0.0
 
-if uploaded_photo:
+if scanned_img_file:
     try:
-        img = Image.open(uploaded_photo)
+        img = Image.open(scanned_img_file)
         ocr_text = pytesseract.image_to_string(img)
         scanned_part, scanned_desc, scanned_mrp = parse_tvs_label(ocr_text)
         if scanned_part:
-            st.sidebar.success(f"Detected: {scanned_part}")
+            st.sidebar.success(f"Detected Part: {scanned_part}")
         else:
-            st.sidebar.warning("Could not auto-detect part number.")
+            st.sidebar.warning("Could not auto-detect part number from image.")
     except Exception as e:
         st.sidebar.error(f"Scanner Error: {e}")
 
 st.sidebar.markdown("---")
 
-# 1. ADD NEW PART
-st.sidebar.header("➕ Add New Part")
-with st.sidebar.form("add_part_form", clear_on_submit=True):
-    new_part_no = st.text_input("Part Number", value=scanned_part)
-    new_desc = st.text_input("Description", value=scanned_desc)
-    new_model = st.text_input("Model", value="Universal")
+# Check if scanned part already exists in database
+existing_match = False
+if scanned_part and not df.empty and 'part_number' in df.columns:
+    existing_match = scanned_part in df['part_number'].values
+
+if existing_match:
+    st.sidebar.info(f"ℹ️ Part **{scanned_part}** is already in your database!")
+    st.sidebar.header("📦 Quick Stock In (Duplicate Guard)")
     
-    default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
-    new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
-    default_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
-    
-    new_cost = st.number_input("Unit Cost (₹ [MRP - 16%])", min_value=0.0, value=default_cost, step=1.0)
-    new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
-    new_min = st.number_input("Min Threshold", min_value=1, value=5, step=1)
-    
-    submit_new_part = st.form_submit_button("Add to Database")
-    
-    if submit_new_part:
-        if not new_part_no.strip():
-            st.sidebar.error("Part Number is required!")
-        else:
-            new_row = pd.DataFrame([{
-                'part_number': new_part_no.strip(),
-                'description': new_desc.strip(),
-                'model': new_model.strip(),
-                'unit_cost': float(new_cost),
-                'unit_mrp': float(new_mrp),
-                'stock_qty': int(new_qty),
-                'min_threshold': int(new_min),
-                'units_sold': 0
-            }])
-            df = pd.concat([df, new_row], ignore_index=True)
-            save_data(df)
-            time.sleep(1)
-            st.rerun()
+    # Quick stock adjustment directly from scan
+    add_qty_val = st.sidebar.number_input("Add Quantity to Stock", min_value=1, value=1, step=1, key="quick_add_qty")
+    if st.sidebar.button("Confirm Restock"):
+        current_stock = int(df.loc[df['part_number'] == scanned_part, 'stock_qty'].values[0])
+        df.loc[df['part_number'] == scanned_part, 'stock_qty'] = current_stock + add_qty_val
+        save_data(df)
+        st.sidebar.success(f"Added {add_qty_val} units to {scanned_part}!")
+        time.sleep(1)
+        st.rerun()
+else:
+    # 1. ADD NEW PART
+    st.sidebar.header("➕ Add New Part")
+    with st.sidebar.form("add_part_form", clear_on_submit=True):
+        new_part_no = st.text_input("Part Number", value=scanned_part)
+        new_desc = st.text_input("Description", value=scanned_desc)
+        new_model = st.text_input("Model", value="Universal")
+        
+        default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
+        new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
+        default_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
+        
+        new_cost = st.number_input("Unit Cost (₹ [MRP - 16%])", min_value=0.0, value=default_cost, step=1.0)
+        new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
+        new_min = st.number_input("Min Threshold", min_value=1, value=5, step=1)
+        
+        submit_new_part = st.form_submit_button("Add to Database")
+        
+        if submit_new_part:
+            if not new_part_no.strip():
+                st.sidebar.error("Part Number is required!")
+            else:
+                new_row = pd.DataFrame([{
+                    'part_number': new_part_no.strip(),
+                    'description': new_desc.strip(),
+                    'model': new_model.strip(),
+                    'unit_cost': float(new_cost),
+                    'unit_mrp': float(new_mrp),
+                    'stock_qty': int(new_qty),
+                    'min_threshold': int(new_min),
+                    'units_sold': 0
+                }])
+                df = pd.concat([df, new_row], ignore_index=True)
+                save_data(df)
+                time.sleep(1)
+                st.rerun()
 
 st.sidebar.markdown("---")
 
