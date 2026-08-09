@@ -85,23 +85,55 @@ def save_data(df_to_save):
 
 df = load_data()
 
-# Targeted TVS Part Number OCR Parser
-def extract_part_number(scanned_text):
-    if not scanned_text:
-        return ""
+# Smart OCR Parser: Extracts Part Number, Description, and MRP from TVS Label
+def parse_tvs_label(scanned_text):
+    part_no = ""
+    description = ""
+    mrp_val = 0.0
     
-    lines = scanned_text.split('\n')
-    for line in lines:
-        cleaned_line = line.strip().upper()
-        match = re.search(r'\b[A-Z]{2}\d{6}\b', cleaned_line)
-        if match:
-            return match.group(0)
-            
-    all_matches = re.findall(r'\b[A-Z0-9]{7,10}\b', scanned_text.upper())
-    if all_matches:
-        return all_matches[0]
+    if not scanned_text:
+        return part_no, description, mrp_val
         
-    return ""
+    lines = scanned_text.split('\n')
+    cleaned_lines = [l.strip() for l in lines if l.strip()]
+    
+    for line in cleaned_lines:
+        line_upper = line.upper()
+        
+        # 1. Extract Part Number (e.g. NF040370)
+        if not part_no:
+            match_pn = re.search(r'\b[A-Z]{2}\d{6}\b', line_upper)
+            if match_pn:
+                part_no = match_pn.group(0)
+        
+        # 2. Extract MRP (e.g. MRP Rs. 298.00 or 298.00)
+        if mrp_val == 0.0 and ("MRP" in line_upper or "RS" in line_upper):
+            match_mrp = re.findall(r'(\d+\.\d{2})', line)
+            if match_mrp:
+                mrp_val = float(match_mrp[-1]) # Usually last decimal in MRP line
+                
+        # 3. Extract Description (Usually contains words like COMP, FILTER, KIT, etc. or appears in capital letters mid-label)
+        if not description:
+            if any(keyword in line_upper for keyword in ["COMP", "FILTER", "KIT", "ASSY", "CABLE", "PAD", "SHOE", "VALVE", "GEAR"]):
+                description = line.strip()
+
+    # Fallback search if description wasn't caught by keywords
+    if not description and len(cleaned_lines) > 2:
+        for line in cleaned_lines:
+            if len(line) > 5 and not any(w in line.upper() for w in ["MRP", "NET", "QUANTITY", "MANUFACTURED", "TVS", "TAXES"]):
+                if not re.search(r'\b[A-Z]{2}\d{6}\b', line.upper()):
+                    description = line.strip()
+                    break
+
+    # Fallback MRP check if missed
+    if mrp_val == 0.0:
+        for line in cleaned_lines:
+            match_all_nums = re.findall(r'(\d+\.\d{2})', line)
+            if match_all_nums:
+                mrp_val = float(match_all_nums[0])
+                break
+
+    return part_no, description, mrp_val
 
 # Branded Invoice Image Generator
 def generate_receipt_image(cust_name, bill_items, service_charge, discount, final_total):
@@ -192,29 +224,37 @@ def generate_receipt_image(cust_name, bill_items, service_charge, discount, fina
 st.sidebar.header("📷 Label Scanner")
 uploaded_photo = st.sidebar.file_uploader("Snap/Upload Part Sticker", type=["jpg", "jpeg", "png"])
 
-scanned_part_code = ""
+scanned_part = ""
+scanned_desc = ""
+scanned_mrp = 0.0
+
 if uploaded_photo:
     try:
         img = Image.open(uploaded_photo)
         ocr_text = pytesseract.image_to_string(img)
-        scanned_part_code = extract_part_number(ocr_text)
-        if scanned_part_code:
-            st.sidebar.success(f"Extracted Part #: {scanned_part_code}")
+        scanned_part, scanned_desc, scanned_mrp = parse_tvs_label(ocr_text)
+        if scanned_part:
+            st.sidebar.success(f"Detected: {scanned_part}")
         else:
-            st.sidebar.warning("Part number not detected clearly. Type it below.")
+            st.sidebar.warning("Could not auto-detect part number.")
     except Exception as e:
         st.sidebar.error(f"Scanner Error: {e}")
 
 st.sidebar.markdown("---")
 
-# 1. ADD NEW PART (Moved right below scanner & auto-filled)
+# 1. ADD NEW PART (Auto-filled with Scanner data & 16% unit cost formula)
 st.sidebar.header("➕ Add New Part")
 with st.sidebar.form("add_part_form", clear_on_submit=True):
-    new_part_no = st.text_input("Part Number", value=scanned_part_code)
-    new_desc = st.text_input("Description")
+    new_part_no = st.text_input("Part Number", value=scanned_part)
+    new_desc = st.text_input("Description", value=scanned_desc)
     new_model = st.text_input("Model", value="Universal")
-    new_cost = st.number_input("Unit Cost (₹)", min_value=0.0, value=0.0, step=1.0)
-    new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=0.0, step=1.0)
+    
+    # Auto formula: Unit Cost = MRP - 16%
+    default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
+    new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
+    default_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
+    
+    new_cost = st.number_input("Unit Cost (₹ [MRP - 16%])", min_value=0.0, value=default_cost, step=1.0)
     new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
     new_min = st.number_input("Min Threshold", min_value=1, value=5, step=1)
     
@@ -241,7 +281,7 @@ with st.sidebar.form("add_part_form", clear_on_submit=True):
 
 st.sidebar.markdown("---")
 
-# 2. MANUAL STOCK ADJUSTMENT (Moved to the bottom)
+# 2. MANUAL STOCK ADJUSTMENT (At the bottom)
 st.sidebar.header("⚙️ Manual Stock Adjustment")
 if not df.empty and 'part_number' in df.columns:
     part_options = df['part_number'].unique()
