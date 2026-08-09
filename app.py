@@ -96,22 +96,22 @@ def extract_part_number(scanned_text):
         
     return cleaned
 
-# Helper function to generate receipt image with service charge, discount, and watermark
+# Helper function to generate receipt image with diagonally tilted colored watermark & TVS logo
 def generate_receipt_image(cust_name, bill_items, service_charge, discount, final_total):
-    img_width, img_height = 600, 920
+    img_width, img_height = 600, 950
     base_img = Image.new("RGB", (img_width, img_height), color="white")
     
     txt_layer = Image.new("RGBA", base_img.size, (255, 255, 255, 0))
     try:
-        font_wm = ImageFont.truetype("arial.ttf", 55)
-        font_logo = ImageFont.truetype("arial.ttf", 36)
+        font_wm = ImageFont.truetype("arial.ttf", 60)
+        font_logo = ImageFont.truetype("arial.ttf", 40)
     except IOError:
         font_wm = ImageFont.load_default()
         font_logo = ImageFont.load_default()
 
     draw_wm = ImageDraw.Draw(txt_layer)
-    draw_wm.text((150, 350), "TVS [LOGO]", fill=(220, 230, 245, 100), font=font_logo)
-    draw_wm.text((80, 440), "SEEMA TVS", fill=(210, 225, 240, 120), font=font_wm)
+    draw_wm.text((120, 320), "TVS [LOGO]", fill=(180, 200, 230, 130), font=font_logo)
+    draw_wm.text((60, 410), "SEEMA TVS", fill=(170, 195, 230, 140), font=font_wm)
     
     rotated_txt = txt_layer.rotate(25, expand=1)
     base_img.paste(rotated_txt, (-50, -50), rotated_txt)
@@ -156,7 +156,6 @@ def generate_receipt_image(cust_name, bill_items, service_charge, discount, fina
         
     draw.line([(30, y_offset + 10), (570, y_offset + 10)], fill="black", width=1)
     
-    # Additional Charges & Discounts Breakdown
     y_offset += 20
     draw.text((30, y_offset), "Subtotal Parts:", fill="black", font=font_regular)
     subtotal_parts = sum(i['total'] for i in bill_items)
@@ -174,11 +173,9 @@ def generate_receipt_image(cust_name, bill_items, service_charge, discount, fina
         
     draw.line([(30, y_offset + 30), (570, y_offset + 30)], fill="black", width=2)
     
-    # Grand Total
     draw.text((30, y_offset + 50), "GRAND TOTAL:", fill="black", font=font_title)
     draw.text((400, y_offset + 50), f"Rs. {final_total:.2f}", fill="black", font=font_title)
     
-    # Footer
     draw.line([(30, y_offset + 110), (570, y_offset + 110)], fill="gray", width=1)
     draw.text((200, y_offset + 130), "Thank you for your business! 🙏", fill="black", font=font_bold)
     
@@ -322,7 +319,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
 
     with tab4:
         st.subheader("Seema TVS Branded Invoice Generator")
-        st.caption("Select items, add service charges or discounts, input customer phone, and generate the image receipt.")
+        st.caption("Select items, add service charges/discounts, and generate a branded receipt image for WhatsApp downloads.")
         
         col_b1, col_b2 = st.columns(2)
         with col_b1:
@@ -382,21 +379,38 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                     
                     receipt_buf = generate_receipt_image(cust_name, bill_items, service_charge, discount_val, final_grand_total)
                     
-                    st.markdown("### 📥 Invoice Preview & Actions")
+                    st.markdown("### 📥 Download Branded Receipt Image & Structured Text")
                     st.image(receipt_buf, caption="Generated Seema TVS Branded Invoice", width=400)
                     
-                    col_d1, col_d2 = st.columns(2)
-                    with col_d1:
-                        st.download_button(
-                            label="Download Invoice Image (PNG)",
-                            data=receipt_buf,
-                            file_name=f"Seema_TVS_Invoice_{cust_name}.png",
-                            mime="image/png"
-                        )
+                    st.download_button(
+                        label="Download Invoice Image (PNG)",
+                        data=receipt_buf,
+                        file_name=f"Seema_TVS_Invoice_{cust_name}.png",
+                        mime="image/png"
+                    )
                     
-                    with col_d2:
-                        wa_msg = urllib.parse.quote(f"Hello {cust_name}, here is your bill receipt from Seema TVS Agency. Grand Total: ₹{final_grand_total:.2f}. Thank you for your business! 🙏")
-                        wa_url = f"https://wa.me/{cust_phone}?text={wa_msg}" if cust_phone else f"https://wa.me/?text={wa_msg}"
-                        st.markdown(f"👉 **[Click to Open WhatsApp Chat]({wa_url})**", unsafe_allow_html=True)
+                    wa_invoice = f"*--- 📋 SEEMA TVS INVOICE ---*\n"
+                    wa_invoice += f"*Customer:* {cust_name}\n"
+                    wa_invoice += f"*Date:* {pd.Timestamp.now().strftime('%d-%m-%Y %H:%M')}\n"
+                    wa_invoice += f"--------------------------------\n"
+                    for itm in bill_items:
+                        wa_invoice += f"• *{itm['part']}* ({itm['desc']})\n"
+                        wa_invoice += f"  Qty: {itm['qty']} × ₹{itm['mrp']:.2f} = *₹{itm['total']:.2f}*\n"
+                    wa_invoice += f"--------------------------------\n"
+                    wa_invoice += f"Parts Subtotal: ₹{parts_total:.2f}\n"
+                    if service_charge > 0:
+                        wa_invoice += f"Service Charge: +₹{service_charge:.2f}\n"
+                    if discount_val > 0:
+                        wa_invoice += f"Discount: -₹{discount_val:.2f}\n"
+                    wa_invoice += f"--------------------------------\n"
+                    wa_invoice += f"*GRAND TOTAL: ₹{final_grand_total:.2f}*\n"
+                    wa_invoice += f"--------------------------------\n"
+                    wa_invoice += f"🙏 Thank you for choosing Seema TVS!"
+                    
+                    encoded_wa = urllib.parse.quote(wa_invoice)
+                    wa_link = f"https://wa.me/{cust_phone}?text={encoded_wa}" if cust_phone else f"https://wa.me/?text={encoded_wa}"
+                    
+                    st.markdown(f"👉 **[Click to Open WhatsApp with Structured Bill]({wa_link})**", unsafe_allow_html=True)
+                    st.text_area("Or copy structured bill text manually:", value=wa_invoice, height=200)
 else:
     st.info("Your inventory database is currently empty. Use the sidebar on the left to add your first part!")
