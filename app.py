@@ -24,29 +24,10 @@ else:
 
 st.title("TVS Agency Inventory & Order Management")
 import re
-
 def load_data():
     try:
-        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        raw_key = st.secrets["private_key"].replace("\\n", "\n")
-        creds_dict = {
-            "type": st.secrets["type"],
-            "project_id": st.secrets["project_id"],
-            "private_key_id": st.secrets["private_key_id"],
-            "private_key": raw_key,
-            "client_email": st.secrets["client_email"],
-            "client_id": st.secrets["client_id"],
-            "auth_uri": st.secrets["auth_uri"],
-            "token_uri": st.secrets["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": st.secrets["client_x509_cert_url"],
-            "universe_domain": st.secrets["universe_domain"]
-        }
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-        client = gspread.authorize(creds)
-        sheet = client.open_by_url("https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/edit?gid=0#gid=0").sheet1
-        data = sheet.get_all_records()
-        df_loaded = pd.DataFrame(data)
+        sheet_url = "https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/export?format=csv&gid=0"
+        df_loaded = pd.read_csv(sheet_url)
         if 'units_sold' not in df_loaded.columns:
             df_loaded['units_sold'] = 0
         return df_loaded
