@@ -28,8 +28,8 @@ def load_data():
     try:
       sheet_url = "https://docs.google.com/spreadsheets/d/1R10l4CrYCS2I-lGDe-90zp4bZa5Ug_d64vWb5u9Ns/gviz/tq?tqx=out:csv"
       df_loaded = pd.read_csv(sheet_url)
-        if 'units_sold' not in df_loaded.columns:
-            df_loaded['units_sold'] = 0
+if 'units_sold' not in df_loaded.columns:
+      df_loaded['units_sold'] = 0
         return df_loaded
     except Exception as e:
         st.warning(f"Google Sheets load error: {e}. Using local backup.")
