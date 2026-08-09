@@ -85,16 +85,25 @@ def save_data(df_to_save):
 
 df = load_data()
 
-# Barcode Scanner Helper: Extracts clean alphanumeric text from scanned label image
+# Targeted TVS Part Number OCR Parser (Looks for standard codes like NF040370)
 def extract_part_number(scanned_text):
     if not scanned_text:
         return ""
-    cleaned = str(scanned_text).strip()
-    # Find alphanumeric strings typical of part codes
-    matches = re.findall(r'[A-Z0-9\-]{5,15}', cleaned, re.IGNORECASE)
-    if matches:
-        return matches[0].strip()
-    return cleaned.replace("\n", " ").strip()
+    
+    lines = scanned_text.split('\n')
+    for line in lines:
+        cleaned_line = line.strip().upper()
+        # Look for typical TVS part formats: 2 letters followed by numbers (e.g., NF040370)
+        match = re.search(r'\b[A-Z]{2}\d{6}\b', cleaned_line)
+        if match:
+            return match.group(0)
+            
+    # Fallback: find any alphanumeric code sequence of 7-10 characters
+    all_matches = re.findall(r'\b[A-Z0-9]{7,10}\b', scanned_text.upper())
+    if all_matches:
+        return all_matches[0]
+        
+    return ""
 
 # Branded Invoice Image Generator
 def generate_receipt_image(cust_name, bill_items, service_charge, discount, final_total):
@@ -182,8 +191,8 @@ def generate_receipt_image(cust_name, bill_items, service_charge, discount, fina
     return buf
 
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("📷 Barcode Scanner")
-uploaded_photo = st.sidebar.file_uploader("Snap/Upload Item Barcode", type=["jpg", "jpeg", "png"])
+st.sidebar.header("📷 Label Scanner")
+uploaded_photo = st.sidebar.file_uploader("Snap/Upload Part Sticker", type=["jpg", "jpeg", "png"])
 
 scanned_part_code = ""
 if uploaded_photo:
@@ -192,9 +201,9 @@ if uploaded_photo:
         ocr_text = pytesseract.image_to_string(img)
         scanned_part_code = extract_part_number(ocr_text)
         if scanned_part_code:
-            st.sidebar.success(f"Scanned Part #: {scanned_part_code}")
+            st.sidebar.success(f"Extracted Part #: {scanned_part_code}")
         else:
-            st.sidebar.warning("Could not read code clearly. Try again.")
+            st.sidebar.warning("Part number not detected clearly. Type it below.")
     except Exception as e:
         st.sidebar.error(f"Scanner Error: {e}")
 
