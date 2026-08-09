@@ -35,10 +35,9 @@ def load_data():
             if col not in df_loaded.columns:
                 df_loaded[col] = ""
         
-        # Ensure numerical columns are properly formatted as numbers, filling blanks with 0
         num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
         for col in num_cols:
-            df_loaded[col] = pd.to_numeric(df_loaded[col], errors='fillna').fillna(0)
+            df_loaded[col] = pd.to_numeric(df_loaded[col], errors='coerce').fillna(0)
             
         df_loaded = df_loaded.dropna(subset=['part_number'])
         df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
@@ -49,7 +48,6 @@ def load_data():
 
 def save_data(df_to_save):
     try:
-        # Clean up dataframe types before converting to dict to prevent float conversion crashes
         for col in EXPECTED_COLS:
             if col not in df_to_save.columns:
                 df_to_save[col] = ""
