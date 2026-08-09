@@ -26,7 +26,12 @@ EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp',
 
 def load_data():
     try:
-        df_loaded = pd.read_csv(CSV_EXPORT_URL)
+        import time
+        # Add a timestamp to bypass Google Sheets CSV export caching
+        cache_buster = int(time.time())
+        fresh_url = f"{CSV_EXPORT_URL}&t={cache_buster}"
+        
+        df_loaded = pd.read_csv(fresh_url)
         for col in EXPECTED_COLS:
             if col not in df_loaded.columns:
                 df_loaded[col] = ""
@@ -36,7 +41,7 @@ def load_data():
     except Exception as e:
         st.error(f"Load error: {e}")
         return pd.DataFrame(columns=EXPECTED_COLS)
-
+        
 def save_data(df_to_save):
     for col in EXPECTED_COLS:
         if col not in df_to_save.columns:
