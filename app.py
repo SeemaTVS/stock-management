@@ -96,13 +96,31 @@ def extract_part_number(scanned_text):
         
     return cleaned
 
-# Helper function to generate receipt image with Seema TVS branding
+# Helper function to generate receipt image with diagonally tilted colored watermark & TVS branding
 def generate_receipt_image(cust_name, bill_items, grand_total):
-    img_width, img_height = 600, 800
+    img_width, img_height = 600, 850
     base_img = Image.new("RGB", (img_width, img_height), color="white")
+    
+    # Create a separate transparent layer for the diagonal watermark
+    txt_layer = Image.new("RGBA", base_img.size, (255, 255, 255, 0))
+    try:
+        font_wm = ImageFont.truetype("arial.ttf", 55)
+        font_logo = ImageFont.truetype("arial.ttf", 36)
+    except IOError:
+        font_wm = ImageFont.load_default()
+        font_logo = ImageFont.load_default()
+
+    draw_wm = ImageDraw.Draw(txt_layer)
+    # Draw centered background logo placeholder and large diagonally tilted colored watermark text
+    draw_wm.text((150, 320), "TVS [LOGO]", fill=(220, 230, 245, 100), font=font_logo)
+    draw_wm.text((80, 400), "SEEMA TVS", fill=(210, 225, 240, 120), font=font_wm)
+    
+    # Rotate watermark layer diagonally
+    rotated_txt = txt_layer.rotate(25, expand=1)
+    base_img.paste(rotated_txt, (-50, -50), rotated_txt)
+
     draw = ImageDraw.Draw(base_img)
     
-    # Try loading a standard font, fallback to default if unavailable
     try:
         font_title = ImageFont.truetype("arial.ttf", 26)
         font_header = ImageFont.truetype("arial.ttf", 16)
@@ -113,15 +131,6 @@ def generate_receipt_image(cust_name, bill_items, grand_total):
         font_header = ImageFont.load_default()
         font_bold = ImageFont.load_default()
         font_regular = ImageFont.load_default()
-
-    # Draw Watermark Branding "SEEMA TVS" in background
-    try:
-        font_wm = ImageFont.truetype("arial.ttf", 60)
-    except IOError:
-        font_wm = ImageFont.load_default()
-    
-    # Draw faint background watermark
-    draw.text((80, 300), "SEEMA TVS", fill=(230, 230, 230), font=font_wm)
 
     # Header Details
     draw.text((180, 30), "SEEMA TVS AGENCY", fill="black", font=font_title)
@@ -158,10 +167,8 @@ def generate_receipt_image(cust_name, bill_items, grand_total):
     draw.line([(30, y_offset + 90), (570, y_offset + 90)], fill="gray", width=1)
     draw.text((200, y_offset + 110), "Thank you for your business! 🙏", fill="black", font=font_bold)
     
-    # Crop image height dynamically to content size
     final_img = base_img.crop((0, 0, img_width, y_offset + 160))
     
-    # Convert image to bytes buffer
     buf = io.BytesIO()
     final_img.save(buf, format="PNG")
     buf.seek(0)
@@ -299,10 +306,15 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
             st.success("All inventory levels are healthy!")
 
     with tab4:
-        st.subheader("Seema TVS Image Invoice Generator")
-        st.caption("Select items sold to instantly create a branded image receipt with Seema TVS background watermark for WhatsApp sharing.")
+        st.subheader("Seema TVS Branded Invoice Generator")
+        st.caption("Select items, input customer contact info, download the branded receipt image, and open WhatsApp directly.")
         
-        cust_name = st.text_input("Customer Name", value="Customer")
+        col_b1, col_b2 = st.columns(2)
+        with col_b1:
+            cust_name = st.text_input("Customer Name", value="Customer")
+        with col_b2:
+            cust_phone = st.text_input("Customer WhatsApp Number (with country code, e.g., 919876543210)", value="")
+
         selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="img_bill_parts")
         
         bill_items = []
@@ -328,7 +340,7 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
             
             st.markdown(f"### **Grand Total: ₹{grand_total:.2f}**")
             
-            if st.button("Deduct Stock & Generate Invoice Image"):
+            if st.button("Deduct Stock & Generate Invoice"):
                 sale_success = True
                 for item in bill_items:
                     p_no = item["part"]
@@ -345,16 +357,23 @@ if not df.empty and 'part_number' in df.columns and len(df) > 0:
                     save_data(df)
                     st.success("Sale completed and inventory updated in Google Sheet!")
                     
-                    # Generate the receipt image
                     receipt_buf = generate_receipt_image(cust_name, bill_items, grand_total)
                     
-                    st.markdown("### 📥 Download Branded Receipt Image")
-                    st.image(receipt_buf, caption="Generated Seema TVS Invoice", width=400)
-                    st.download_button(
-                        label="Download Invoice Image (PNG)",
-                        data=receipt_buf,
-                        file_name=f"Seema_TVS_Invoice_{cust_name}.png",
-                        mime="image/png"
-                    )
+                    st.markdown("### 📥 Invoice Preview & Actions")
+                    st.image(receipt_buf, caption="Generated Seema TVS Branded Invoice", width=400)
+                    
+                    col_d1, col_d2 = st.columns(2)
+                    with col_d1:
+                        st.download_button(
+                            label="Download Invoice Image (PNG)",
+                            data=receipt_buf,
+                            file_name=f"Seema_TVS_Invoice_{cust_name}.png",
+                            mime="image/png"
+                        )
+                    
+                    with col_d2:
+                        wa_msg = urllib.parse.quote(f"Hello {cust_name}, here is your bill receipt from Seema TVS Agency. Grand Total: ₹{grand_total:.2f}. Thank you for your business! 🙏")
+                        wa_url = f"https://wa.me/{cust_phone}?text={wa_msg}" if cust_phone else f"https://wa.me/?text={wa_msg}"
+                        st.markdown(f"👉 **[Click to Open WhatsApp Chat]({wa_url})**", unsafe_allow_html=True)
 else:
     st.info("Your inventory database is currently empty. Use the sidebar on the left to add your first part!")
