@@ -116,7 +116,6 @@ def save_sale_to_cloud(new_sale_row_dict):
 df = load_data()
 sales_df = load_sales_log()
 
-# Strict Parser: Handles variable alphanumeric parts & filters description to only follow 'PRODUCT'
 def parse_tvs_label(scanned_text):
     part_no = ""
     description = ""
@@ -131,19 +130,16 @@ def parse_tvs_label(scanned_text):
     for line in cleaned_lines:
         line_upper = line.upper()
         
-        # 1. Extract Part Number (flexible alphanumeric format)
         if not part_no:
             match_pn = re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper)
             if match_pn:
                 part_no = match_pn.group(0)
         
-        # 2. Extract MRP
         if mrp_val == 0.0 and ("MRP" in line_upper or "RS" in line_upper):
             match_mrp = re.findall(r'(\d+\.\d{2})', line)
             if match_mrp:
                 mrp_val = float(match_mrp[-1])
                 
-        # 3. Extract Description strictly following 'PRODUCT'
         if not description and "PRODUCT" in line_upper:
             cleaned_desc = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
             if len(cleaned_desc) > 2:
@@ -197,7 +193,6 @@ if existing_match:
         time.sleep(1)
         st.rerun()
 else:
-    # 1. ADD NEW PART (Auto 16% cost calculation, no manual cost field)
     st.sidebar.header("➕ Add New Part")
     with st.sidebar.form("add_part_form", clear_on_submit=True):
         new_part_no = st.text_input("Part Number", value=scanned_part)
@@ -206,8 +201,6 @@ else:
         
         default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
         new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
-        
-        # Auto-deduct 16% for unit cost behind the scenes
         auto_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
         
         new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
@@ -236,7 +229,6 @@ else:
 
 st.sidebar.markdown("---")
 
-# 2. MANUAL STOCK ADJUSTMENT
 st.sidebar.header("⚙️ Manual Stock Adjustment")
 if not df.empty and 'part_number' in df.columns:
     part_options = df['part_number'].unique()
@@ -275,11 +267,12 @@ if not df.empty:
 
     df['status'] = df.apply(calculate_status, axis=1)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Overview & Stock", 
         "✏️ Edit Master Data", 
         "🛒 Record Sale",
-        "📈 Sales & Profit Reports"
+        "📈 Sales & Profit Reports",
+        "📂 Import Excel Master"
     ])
 
     with tab1:
@@ -287,8 +280,20 @@ if not df.empty:
         st.dataframe(df[['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'units_sold', 'status']], use_container_width=True)
 
     with tab2:
-        st.subheader("Interactive Master Data Editor")
-        st.caption("You can freely edit item details and customize unit costs here (e.g., for non-standard margins like oil/lubricants).")
+        st.subheader("Interactive Master Data Editor & Bulk Delete")
+        st.caption("You can freely edit item details, customize unit costs, or select obsolete items below to delete them in bulk.")
+        
+        # Bulk Delete Filter Section
+        with st.expander("🗑️ Bulk Delete Obsolete Parts"):
+            parts_to_delete = st.multiselect("Select parts to remove permanently", df['part_number'].tolist(), key="bulk_delete_select")
+            if parts_to_delete:
+                if st.button("Delete Selected Parts", type="primary"):
+                    df = df[~df['part_number'].isin(parts_to_delete)]
+                    save_data(df)
+                    st.success(f"Successfully deleted {len(parts_to_delete)} parts!")
+                    time.sleep(1)
+                    st.rerun()
+
         edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
         if st.button("Save Changes to Google Sheet"):
             save_data(edited_df)
@@ -297,8 +302,6 @@ if not df.empty:
 
     with tab3:
         st.subheader("Record New Sale Transaction")
-        st.caption("Select sold items, apply service charges or discounts, and complete checkout to update inventory and sales reports.")
-        
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="sale_parts_select")
         
@@ -434,15 +437,85 @@ if not df.empty:
                 filtered_sales[['timestamp', 'customer_name', 'items_detail', 'grand_total', 'total_cost', 'net_profit', 'month_year']],
                 use_container_width=True
             )
-            
-            with st.expander("🔍 View Detailed Line-by-Line Transactions"):
-                for idx, row in filtered_sales.iloc[::-1].iterrows():
-                    st.markdown(f"**Date:** {row['timestamp']} | **Customer:** {row['customer_name']} | **Month:** {row['month_year']}")
-                    st.write(f"**Items:** {row['items_detail']}")
-                    st.write(f"Parts Subtotal: ₹{row['parts_total']:.2f} | Service: +₹{row['service_charge']:.2f} | Discount: -₹{row['discount']:.2f}")
-                    st.write(f"**Grand Total:** ₹{row['grand_total']:.2f} | **Unit Costs:** ₹{row['total_cost']:.2f} | **Profit:** ₹{row['net_profit']:.2f}")
-                    st.divider()
         else:
-            st.info("No sales recorded yet. Use the 'Record Sale' tab to log your first transaction!")
+            st.info("No sales recorded yet.")
+
+    with tab5:
+        st.subheader("📂 Upload Trimmed Excel Master File")
+        st.caption("Upload your trimmed Excel file (containing PART NAME, PARTS NO., BIKE, MRP, QTY). Zero/blank quantity items will be filtered out, stock will be initialized to 0, multi-bike names/ALL will map to Universal, and Excel details will take priority on overlaps.")
+        
+        uploaded_excel = st.file_uploader("Choose Excel File (.xlsx)", type=["xlsx"])
+        if uploaded_excel:
+            try:
+                excel_df = pd.read_excel(uploaded_excel)
+                st.write("Preview of uploaded file:", excel_df.head(3))
+                
+                if st.button("Process & Import Master Inventory", type="primary"):
+                    # Expected columns mapping check based on your format:
+                    # Col 0: PART NAME (Description)
+                    # Col 1: PARTS NO. (Part Number)
+                    # Col 2: BIKE (Model)
+                    # Col 3: MRP
+                    # Col 4: QTY
+                    
+                    excel_df.columns = [str(c).strip().upper() for c in excel_df.columns]
+                    
+                    # Find exact or approximate columns
+                    col_name = next((c for c in excel_df.columns if 'NAME' in c or 'PART' in c), excel_df.columns[0])
+                    col_part = next((c for c in excel_df.columns if 'NO' in c or 'PART' in c), excel_df.columns[1])
+                    col_bike = next((c for c in excel_df.columns if 'BIKE' in c or 'MODEL' in c), excel_df.columns[2])
+                    col_mrp = next((c for c in excel_df.columns if 'MRP' in c), excel_df.columns[3])
+                    col_qty = next((c for c in excel_df.columns if 'QTY' in c or 'QUANTITY' in c), excel_df.columns[4])
+                    
+                    # Filter out 0 or blank quantities
+                    excel_df[col_qty] = pd.to_numeric(excel_df[col_qty], errors='coerce')
+                    excel_df = excel_df.dropna(subset=[col_qty])
+                    excel_df = excel_df[excel_df[col_qty] > 0]
+                    
+                    imported_count = 0
+                    for _, row in excel_df.iterrows():
+                        p_num = str(row[col_part]).strip()
+                        if not p_num or p_num.lower() == 'nan':
+                            continue
+                            
+                        desc = str(row[col_name]).strip()
+                        mrp_val = float(row[col_mrp]) if pd.notnull(row[col_mrp]) else 0.0
+                        cost_val = round(mrp_val * 0.84, 2)
+                        
+                        raw_bike = str(row[col_bike]).strip()
+                        # Check if multiple names or 'all'
+                        if ',' in raw_bike or 'all' in raw_bike.lower():
+                            model_val = "Universal"
+                        else:
+                            model_val = raw_bike if raw_bike and raw_bike.lower() != 'nan' else "Universal"
+                            
+                        # Check if part exists
+                        if not df.empty and p_num in df['part_number'].values:
+                            # Update existing with priority overwrite
+                            df.loc[df['part_number'] == p_num, 'description'] = desc
+                            df.loc[df['part_number'] == p_num, 'model'] = model_val
+                            df.loc[df['part_number'] == p_num, 'unit_mrp'] = mrp_val
+                            df.loc[df['part_number'] == p_num, 'unit_cost'] = cost_val
+                        else:
+                            # Add new row with stock_qty = 0
+                            new_row = pd.DataFrame([{
+                                'part_number': p_num,
+                                'description': desc,
+                                'model': model_val,
+                                'unit_cost': cost_val,
+                                'unit_mrp': mrp_val,
+                                'stock_qty': 0,
+                                'min_threshold': 5,
+                                'units_sold': 0
+                            }])
+                            df = pd.concat([df, new_row], ignore_index=True)
+                        imported_count += 1
+                        
+                    save_data(df)
+                    st.success(f"Successfully processed and imported {imported_count} items from Excel!")
+                    time.sleep(1)
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Error processing Excel file: {e}")
 else:
-    st.info("Your inventory database is currently empty.")
+    st.info("Your inventory database is currently empty. Use the Import tab to load your Excel master sheet.")
