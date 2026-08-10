@@ -26,7 +26,6 @@ st.title("TVS Agency Inventory & Sales Management")
 
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM/edit?gid=0#gid=0"
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbymkbPavkWPw_5kFEN7S6KQTg2MvS_zqAmGXXkqBAjVDo7XrnUCj9GKKKrA_heBvWZvmQ/exec"
-SALES_FILE = "sales_log.csv"
 
 def get_csv_export_url(sheet_url):
     match = re.search(r'/d/([a-zA-Z0-9-_]+)', sheet_url)
@@ -75,8 +74,11 @@ def save_data(df_to_save):
 
         if WEB_APP_URL:
             with st.spinner("Syncing changes to Google Sheet..."):
-                data_dict = df_to_save[EXPECTED_COLS].to_dict(orient="records")
-                response = requests.post(WEB_APP_URL, json=data_dict, timeout=15)
+                payload = {
+                    "type": "inventory",
+                    "data": df_to_save[EXPECTED_COLS].to_dict(orient="records")
+                }
+                response = requests.post(WEB_APP_URL, json=payload, timeout=15)
                 
             if response.status_code == 200:
                 st.sidebar.success("Successfully synced!")
@@ -86,22 +88,30 @@ def save_data(df_to_save):
         st.sidebar.error(f"Float/Sync error: {e}")
 
 def load_sales_log():
-    if os.path.exists(SALES_FILE):
-        try:
-            sales_df = pd.read_csv(SALES_FILE)
-            for col in SALES_COLS:
-                if col not in sales_df.columns:
-                    sales_df[col] = ""
-            return sales_df
-        except Exception:
-            return pd.DataFrame(columns=SALES_COLS)
+    try:
+        if WEB_APP_URL:
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=15)
+            if response.status_code == 200:
+                sales_data = response.json()
+                sales_df = pd.DataFrame(sales_data)
+                for col in SALES_COLS:
+                    if col not in sales_df.columns:
+                        sales_df[col] = ""
+                return sales_df
+    except Exception:
+        pass
     return pd.DataFrame(columns=SALES_COLS)
 
-def save_sales_log(sales_df):
+def save_sale_to_cloud(new_sale_row_dict):
     try:
-        sales_df.to_csv(SALES_FILE, index=False)
+        if WEB_APP_URL:
+            payload = {
+                "type": "sale",
+                "data": new_sale_row_dict
+            }
+            requests.post(WEB_APP_URL, json=payload, timeout=15)
     except Exception as e:
-        st.error(f"Error saving sales log: {e}")
+        st.error(f"Error saving sale to cloud: {e}")
 
 df = load_data()
 sales_df = load_sales_log()
@@ -156,27 +166,21 @@ def parse_tvs_label(scanned_text):
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("📷 Label Scanner")
-scanner_mode = st.sidebar.radio("Input Method", ["Live Camera Snap", "Upload Image File"])
-
-scanned_img_file = None
-if scanner_mode == "Live Camera Snap":
-    scanned_img_file = st.sidebar.camera_input("Snap Part Sticker")
-else:
-    scanned_img_file = st.sidebar.file_uploader("Upload Sticker Image", type=["jpg", "jpeg", "png"])
+uploaded_photo = st.sidebar.file_uploader("Snap/Upload Part Sticker", type=["jpg", "jpeg", "png"])
 
 scanned_part = ""
 scanned_desc = ""
 scanned_mrp = 0.0
 
-if scanned_img_file:
+if uploaded_photo:
     try:
-        img = Image.open(scanned_img_file)
+        img = Image.open(uploaded_photo)
         ocr_text = pytesseract.image_to_string(img)
         scanned_part, scanned_desc, scanned_mrp = parse_tvs_label(ocr_text)
         if scanned_part:
-            st.sidebar.success(f"Detected Part: {scanned_part}")
+            st.sidebar.success(f"Detected: {scanned_part}")
         else:
-            st.sidebar.warning("Could not auto-detect part number from image.")
+            st.sidebar.warning("Could not auto-detect part number.")
     except Exception as e:
         st.sidebar.error(f"Scanner Error: {e}")
 
@@ -191,7 +195,6 @@ if existing_match:
     st.sidebar.info(f"ℹ️ Part **{scanned_part}** is already in your database!")
     st.sidebar.header("📦 Quick Stock In (Duplicate Guard)")
     
-    # Quick stock adjustment directly from scan
     add_qty_val = st.sidebar.number_input("Add Quantity to Stock", min_value=1, value=1, step=1, key="quick_add_qty")
     if st.sidebar.button("Confirm Restock"):
         current_stock = int(df.loc[df['part_number'] == scanned_part, 'stock_qty'].values[0])
@@ -371,11 +374,11 @@ if not df.empty:
                 if sale_success:
                     save_data(df)
                     
-                    # Record transaction to sales log
+                    # Record transaction to cloud sales log
                     now_stamp = pd.Timestamp.now()
                     items_summary = "; ".join([f"{i['part']} ({i['desc']}) x{i['qty']}" for i in bill_items])
                     
-                    new_sale_entry = pd.DataFrame([{
+                    new_sale_dict = {
                         'timestamp': now_stamp.strftime('%Y-%m-%d %H:%M:%S'),
                         'customer_name': cust_name.strip(),
                         'items_detail': items_summary,
@@ -386,10 +389,9 @@ if not df.empty:
                         'total_cost': float(parts_cost_total),
                         'net_profit': float(expected_net_profit),
                         'month_year': now_stamp.strftime('%Y-%m')
-                    }])
+                    }
                     
-                    sales_df = pd.concat([sales_df, new_sale_entry], ignore_index=True)
-                    save_sales_log(sales_df)
+                    save_sale_to_cloud(new_sale_dict)
                     
                     st.success("Sale completed! Inventory updated and transaction saved to reports.")
                     time.sleep(1)
