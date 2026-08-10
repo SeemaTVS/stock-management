@@ -116,7 +116,6 @@ def save_sale_to_cloud(new_sale_row_dict):
 df = load_data()
 sales_df = load_sales_log()
 
-# Strict Parser: Handles variable alphanumeric parts & filters description to only follow 'PRODUCT'
 def parse_tvs_label(scanned_text):
     part_no = ""
     description = ""
@@ -131,19 +130,16 @@ def parse_tvs_label(scanned_text):
     for line in cleaned_lines:
         line_upper = line.upper()
         
-        # 1. Extract Part Number (flexible alphanumeric format)
         if not part_no:
             match_pn = re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper)
             if match_pn:
                 part_no = match_pn.group(0)
         
-        # 2. Extract MRP
         if mrp_val == 0.0 and ("MRP" in line_upper or "RS" in line_upper):
             match_mrp = re.findall(r'(\d+\.\d{2})', line)
             if match_mrp:
                 mrp_val = float(match_mrp[-1])
                 
-        # 3. Extract Description strictly following 'PRODUCT'
         if not description and "PRODUCT" in line_upper:
             cleaned_desc = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
             if len(cleaned_desc) > 2:
@@ -180,6 +176,95 @@ if uploaded_photo:
 
 st.sidebar.markdown("---")
 
+# --- EXCEL IMPORT WIDGET ---
+st.sidebar.header("📂 Bulk Import from Excel")
+uploaded_excel = st.sidebar.file_uploader("Upload Excel Sheet", type=["xlsx", "xls", "csv"])
+
+if uploaded_excel:
+    if st.sidebar.button("Process & Import Excel"):
+        try:
+            # header=None ensures plain text first rows aren't mistakenly treated as column headers
+            if uploaded_excel.name.endswith('.csv'):
+                excel_df = pd.read_csv(uploaded_excel, header=None)
+            else:
+                excel_df = pd.read_excel(uploaded_excel, header=None)
+            
+            if len(excel_df.columns) >= 5:
+                # Positional mapping based on standard layouts (0: Part No, 1: Description, 2: Model, 3: MRP, 4: QTY)
+                pn_col = 0
+                desc_col = 1
+                model_col = 2
+                mrp_col = 3
+                qty_col = 4
+                
+                imported_count = 0
+                for _, row in excel_df.iterrows():
+                    raw_qty = row[qty_col]
+                    # Filter out 0 or blank QTY rows
+                    if pd.isna(raw_qty) or str(raw_qty).strip() == "" or str(raw_qty).strip() == "0" or str(raw_qty).strip().lower() == "qty":
+                        continue
+                    
+                    try:
+                        qty_val = float(raw_qty)
+                        if qty_val <= 0:
+                            continue
+                    except ValueError:
+                        continue
+                        
+                    part_no = str(row[pn_col]).strip()
+                    if not part_no or part_no.lower() == 'nan' or part_no.lower() == 'part_number':
+                        continue
+                        
+                    desc = str(row[desc_col]).strip() if not pd.isna(row[desc_col]) else ""
+                    
+                    # Bike Model Mapping: Column C (index 2) maps to model tab, converting multi-name entries and "ALL" tags into "Universal"
+                    raw_model = str(row[model_col]).strip() if not pd.isna(row[model_col]) else "Universal"
+                    upper_model = raw_model.upper()
+                    if "ALL" in upper_model or "," in raw_model or "/" in raw_model or len(raw_model.split()) > 2:
+                        bike_model = "Universal"
+                    else:
+                        bike_model = raw_model if raw_model else "Universal"
+                        
+                    try:
+                        mrp_val = float(row[mrp_col]) if not pd.isna(row[mrp_col]) else 0.0
+                    except ValueError:
+                        mrp_val = 0.0
+                        
+                    auto_cost = round(mrp_val * 0.84, 2) if mrp_val > 0 else 0.0
+                    
+                    # Check if part exists in existing database for overwrite priority
+                    if not df.empty and 'part_number' in df.columns and part_no in df['part_number'].values:
+                        df.loc[df['part_number'] == part_no, 'description'] = desc
+                        df.loc[df['part_number'] == part_no, 'model'] = bike_model
+                        df.loc[df['part_number'] == part_no, 'unit_mrp'] = float(mrp_val)
+                        df.loc[df['part_number'] == part_no, 'unit_cost'] = float(auto_cost)
+                        df.loc[df['part_number'] == part_no, 'stock_qty'] = 0.0
+                    else:
+                        new_row = pd.DataFrame([{
+                            'part_number': part_no,
+                            'description': desc,
+                            'model': bike_model,
+                            'unit_cost': float(auto_cost),
+                            'unit_mrp': float(mrp_val),
+                            'stock_qty': 0.0,
+                            'min_threshold': 5.0,
+                            'units_sold': 0.0
+                        }])
+                        df = pd.concat([df, new_row], ignore_index=True)
+                    
+                    imported_count += 1
+                
+                save_data(df)
+                st.sidebar.success(f"Successfully processed and imported {imported_count} items with 0 initial stock!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.sidebar.error("The uploaded Excel sheet does not have enough columns.")
+        except Exception as e:
+            st.sidebar.error(f"Excel Import Error: {e}")
+
+st.sidebar.markdown("---")
+
 existing_match = False
 if scanned_part and not df.empty and 'part_number' in df.columns:
     existing_match = scanned_part in df['part_number'].values
@@ -197,7 +282,6 @@ if existing_match:
         time.sleep(1)
         st.rerun()
 else:
-    # 1. ADD NEW PART (Auto 16% cost calculation, no manual cost field)
     st.sidebar.header("➕ Add New Part")
     with st.sidebar.form("add_part_form", clear_on_submit=True):
         new_part_no = st.text_input("Part Number", value=scanned_part)
@@ -207,7 +291,6 @@ else:
         default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
         new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
         
-        # Auto-deduct 16% for unit cost behind the scenes
         auto_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
         
         new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
@@ -236,7 +319,6 @@ else:
 
 st.sidebar.markdown("---")
 
-# 2. MANUAL STOCK ADJUSTMENT
 st.sidebar.header("⚙️ Manual Stock Adjustment")
 if not df.empty and 'part_number' in df.columns:
     part_options = df['part_number'].unique()
@@ -288,12 +370,29 @@ if not df.empty:
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
-        st.caption("You can freely edit item details and customize unit costs here (e.g., for non-standard margins like oil/lubricants).")
+        st.caption("You can freely edit item details and customize unit costs here, or perform bulk deletion of obsolete parts.")
+        
         edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
-        if st.button("Save Changes to Google Sheet"):
-            save_data(edited_df)
-            time.sleep(1)
-            st.rerun()
+        
+        col_save_editor, col_bulk_del = st.columns([1, 1])
+        with col_save_editor:
+            if st.button("Save Changes to Google Sheet"):
+                save_data(edited_df)
+                time.sleep(1)
+                st.rerun()
+                
+        st.markdown("---")
+        st.subheader("🗑️ Bulk Delete Obsolete Parts")
+        parts_to_delete = st.multiselect("Select Part Numbers to Delete in Batch", df['part_number'].tolist(), key="bulk_delete_select")
+        if st.button("Delete Selected Parts", type="primary"):
+            if parts_to_delete:
+                df = df[~df['part_number'].isin(parts_to_delete)]
+                save_data(df)
+                st.success(f"Successfully deleted {len(parts_to_delete)} parts!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.warning("Please select at least one part number to delete.")
 
     with tab3:
         st.subheader("Record New Sale Transaction")
