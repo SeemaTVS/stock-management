@@ -116,7 +116,7 @@ def save_sale_to_cloud(new_sale_row_dict):
 df = load_data()
 sales_df = load_sales_log()
 
-# Updated Smart OCR Parser for TVS Labels
+# Strict Parser: Handles variable alphanumeric parts & filters description to only follow 'PRODUCT'
 def parse_tvs_label(scanned_text):
     part_no = ""
     description = ""
@@ -131,7 +131,7 @@ def parse_tvs_label(scanned_text):
     for line in cleaned_lines:
         line_upper = line.upper()
         
-        # 1. Extract Part Number (flexible for 1-2 letters followed by numbers, or mixed alphanumeric codes)
+        # 1. Extract Part Number (flexible alphanumeric format)
         if not part_no:
             match_pn = re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper)
             if match_pn:
@@ -143,24 +143,11 @@ def parse_tvs_label(scanned_text):
             if match_mrp:
                 mrp_val = float(match_mrp[-1])
                 
-        # 3. Extract Description (ignoring words like 'PRODUCT:')
-        if not description:
-            if "PRODUCT" in line_upper:
-                # Strip out 'PRODUCT:' or 'PRODUCT' and take what comes right after
-                cleaned_desc = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
-                if len(cleaned_desc) > 2:
-                    description = cleaned_desc
-            elif any(keyword in line_upper for keyword in ["COMP", "FILTER", "KIT", "ASSY", "CABLE", "PAD", "SHOE", "VALVE", "GEAR", "THROTTLE"]):
-                description = line.strip()
-
-    # Fallback description detector if explicit keywords weren't caught
-    if not description:
-        for line in cleaned_lines:
-            line_upper = line.upper()
-            if len(line) > 4 and not any(w in line_upper for w in ["MRP", "NET", "QUANTITY", "MANUFACTURED", "TVS", "TAXES", "POST BOX", "TAMILNADU", "COMPLAINTS"]):
-                if not re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper):
-                    description = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
-                    break
+        # 3. Extract Description strictly following 'PRODUCT'
+        if not description and "PRODUCT" in line_upper:
+            cleaned_desc = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
+            if len(cleaned_desc) > 2:
+                description = cleaned_desc
 
     if mrp_val == 0.0:
         for line in cleaned_lines:
@@ -193,7 +180,6 @@ if uploaded_photo:
 
 st.sidebar.markdown("---")
 
-# Check if scanned part already exists in database
 existing_match = False
 if scanned_part and not df.empty and 'part_number' in df.columns:
     existing_match = scanned_part in df['part_number'].values
@@ -211,7 +197,7 @@ if existing_match:
         time.sleep(1)
         st.rerun()
 else:
-    # 1. ADD NEW PART
+    # 1. ADD NEW PART (Auto 16% cost calculation, no manual cost field)
     st.sidebar.header("➕ Add New Part")
     with st.sidebar.form("add_part_form", clear_on_submit=True):
         new_part_no = st.text_input("Part Number", value=scanned_part)
@@ -220,9 +206,10 @@ else:
         
         default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
         new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
-        default_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
         
-        new_cost = st.number_input("Unit Cost (₹ [MRP - 16%])", min_value=0.0, value=default_cost, step=1.0)
+        # Auto-deduct 16% for unit cost behind the scenes
+        auto_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
+        
         new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
         new_min = st.number_input("Min Threshold", min_value=1, value=5, step=1)
         
@@ -236,7 +223,7 @@ else:
                     'part_number': new_part_no.strip(),
                     'description': new_desc.strip(),
                     'model': new_model.strip(),
-                    'unit_cost': float(new_cost),
+                    'unit_cost': float(auto_cost),
                     'unit_mrp': float(new_mrp),
                     'stock_qty': int(new_qty),
                     'min_threshold': int(new_min),
@@ -301,6 +288,7 @@ if not df.empty:
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
+        st.caption("You can freely edit item details and customize unit costs here (e.g., for non-standard margins like oil/lubricants).")
         edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
         if st.button("Save Changes to Google Sheet"):
             save_data(edited_df)
