@@ -116,7 +116,7 @@ def save_sale_to_cloud(new_sale_row_dict):
 df = load_data()
 sales_df = load_sales_log()
 
-# Smart OCR Parser: Extracts Part Number, Description, and MRP from TVS Label
+# Updated Smart OCR Parser for TVS Labels
 def parse_tvs_label(scanned_text):
     part_no = ""
     description = ""
@@ -131,9 +131,9 @@ def parse_tvs_label(scanned_text):
     for line in cleaned_lines:
         line_upper = line.upper()
         
-        # 1. Extract Part Number
+        # 1. Extract Part Number (flexible for 1-2 letters followed by numbers, or mixed alphanumeric codes)
         if not part_no:
-            match_pn = re.search(r'\b[A-Z]{2}\d{6}\b', line_upper)
+            match_pn = re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper)
             if match_pn:
                 part_no = match_pn.group(0)
         
@@ -143,16 +143,23 @@ def parse_tvs_label(scanned_text):
             if match_mrp:
                 mrp_val = float(match_mrp[-1])
                 
-        # 3. Extract Description
+        # 3. Extract Description (ignoring words like 'PRODUCT:')
         if not description:
-            if any(keyword in line_upper for keyword in ["COMP", "FILTER", "KIT", "ASSY", "CABLE", "PAD", "SHOE", "VALVE", "GEAR"]):
+            if "PRODUCT" in line_upper:
+                # Strip out 'PRODUCT:' or 'PRODUCT' and take what comes right after
+                cleaned_desc = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
+                if len(cleaned_desc) > 2:
+                    description = cleaned_desc
+            elif any(keyword in line_upper for keyword in ["COMP", "FILTER", "KIT", "ASSY", "CABLE", "PAD", "SHOE", "VALVE", "GEAR", "THROTTLE"]):
                 description = line.strip()
 
-    if not description and len(cleaned_lines) > 2:
+    # Fallback description detector if explicit keywords weren't caught
+    if not description:
         for line in cleaned_lines:
-            if len(line) > 5 and not any(w in line.upper() for w in ["MRP", "NET", "QUANTITY", "MANUFACTURED", "TVS", "TAXES"]):
-                if not re.search(r'\b[A-Z]{2}\d{6}\b', line.upper()):
-                    description = line.strip()
+            line_upper = line.upper()
+            if len(line) > 4 and not any(w in line_upper for w in ["MRP", "NET", "QUANTITY", "MANUFACTURED", "TVS", "TAXES", "POST BOX", "TAMILNADU", "COMPLAINTS"]):
+                if not re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper):
+                    description = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
                     break
 
     if mrp_val == 0.0:
@@ -178,7 +185,7 @@ if uploaded_photo:
         ocr_text = pytesseract.image_to_string(img)
         scanned_part, scanned_desc, scanned_mrp = parse_tvs_label(ocr_text)
         if scanned_part:
-            st.sidebar.success(f"Detected: {scanned_part}")
+            st.sidebar.success(f"Detected Part: {scanned_part}")
         else:
             st.sidebar.warning("Could not auto-detect part number.")
     except Exception as e:
@@ -374,7 +381,6 @@ if not df.empty:
                 if sale_success:
                     save_data(df)
                     
-                    # Record transaction to cloud sales log
                     now_stamp = pd.Timestamp.now()
                     items_summary = "; ".join([f"{i['part']} ({i['desc']}) x{i['qty']}" for i in bill_items])
                     
@@ -405,7 +411,6 @@ if not df.empty:
             for col in num_cols_s:
                 sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
 
-            # Month Selector Filter
             months = ["All Months"] + sorted(sales_df['month_year'].astype(str).unique().tolist(), reverse=True)
             selected_month = st.selectbox("Select Reporting Month", months)
             
@@ -416,7 +421,6 @@ if not df.empty:
                 
             st.markdown("---")
             
-            # High-level Metrics
             m_col1, m_col2, m_col3, m_col4 = st.columns(4)
             with m_col1:
                 st.metric("Total Transactions", len(filtered_sales))
@@ -430,7 +434,6 @@ if not df.empty:
             st.markdown("---")
             st.markdown("### Transaction Log & Details")
             
-            # Export sales records
             csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Export Selected Sales Data (CSV)",
