@@ -68,6 +68,9 @@ def save_data(df_to_save):
         for col in num_cols:
             df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0)
             
+        # Clean up any remaining infinities or NaNs explicitly for JSON safety
+        df_to_save[num_cols] = df_to_save[num_cols].astype(float).fillna(0)
+            
         df_to_save['part_number'] = df_to_save['part_number'].astype(str).str.strip()
         df_to_save = df_to_save.dropna(subset=['part_number'])
         df_to_save = df_to_save[df_to_save['part_number'] != ""]
