@@ -68,18 +68,35 @@ def save_data(df_to_save):
         for col in num_cols:
             df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0)
             
-        # Clean up any remaining infinities or NaNs explicitly for JSON safety
-        df_to_save[num_cols] = df_to_save[num_cols].astype(float).fillna(0)
+        # Explicitly replace all NaN/None/inf values in numerical columns with 0
+        df_to_save[num_cols] = df_to_save[num_cols].fillna(0)
+        
+        # Also clean text columns to ensure no NaN strings
+        text_cols = ['part_number', 'description', 'model']
+        for col in text_cols:
+            if col in df_to_save.columns:
+                df_to_save[col] = df_to_save[col].fillna("").astype(str).str.strip()
             
-        df_to_save['part_number'] = df_to_save['part_number'].astype(str).str.strip()
         df_to_save = df_to_save.dropna(subset=['part_number'])
         df_to_save = df_to_save[df_to_save['part_number'] != ""]
 
         if WEB_APP_URL:
             with st.spinner("Syncing changes to Google Sheet..."):
+                # Convert dataframe records and sanitize any residual non-compliant float types
+                records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
+                clean_records = []
+                for row in records:
+                    clean_row = {}
+                    for k, v in row.items():
+                        if isinstance(v, float) and (pd.isna(v) or v == float('inf') or v == float('-inf')):
+                            clean_row[k] = 0.0
+                        else:
+                            clean_row[k] = v
+                    clean_records.append(clean_row)
+
                 payload = {
                     "type": "inventory",
-                    "data": df_to_save[EXPECTED_COLS].to_dict(orient="records")
+                    "data": clean_records
                 }
                 response = requests.post(WEB_APP_URL, json=payload, timeout=15)
                 
