@@ -68,10 +68,8 @@ def save_data(df_to_save):
         for col in num_cols:
             df_to_save[col] = pd.to_numeric(df_to_save[col], errors='coerce').fillna(0)
             
-        # Explicitly replace all NaN/None/inf values in numerical columns with 0
         df_to_save[num_cols] = df_to_save[num_cols].fillna(0)
         
-        # Also clean text columns to ensure no NaN strings
         text_cols = ['part_number', 'description', 'model']
         for col in text_cols:
             if col in df_to_save.columns:
@@ -82,7 +80,6 @@ def save_data(df_to_save):
 
         if WEB_APP_URL:
             with st.spinner("Syncing changes to Google Sheet..."):
-                # Convert dataframe records and sanitize any residual non-compliant float types
                 records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
                 clean_records = []
                 for row in records:
@@ -196,85 +193,83 @@ if uploaded_photo:
 
 st.sidebar.markdown("---")
 
-existing_match = False
-if scanned_part and not df.empty and 'part_number' in df.columns:
-    existing_match = scanned_part in df['part_number'].values
+# --- UNIFIED PART MANAGER (Lookup / Add / Modify) ---
+st.sidebar.header("📦 Part Manager & Stock Control")
 
-if existing_match:
-    st.sidebar.info(f"ℹ️ Part **{scanned_part}** is already in your database!")
-    st.sidebar.header("📦 Quick Stock In (Duplicate Guard)")
+if "lookup_part_input" not in st.session_state:
+    st.session_state["lookup_part_input"] = scanned_part
+
+input_part_no = st.sidebar.text_input("Enter/Scan Part Number", value=st.session_state["lookup_part_input"])
+
+matched_row = None
+if input_part_no.strip() and not df.empty and 'part_number' in df.columns:
+    match_filter = df[df['part_number'].astype(str).str.strip().str.upper() == input_part_no.strip().upper()]
+    if not match_filter.empty:
+        matched_row = match_filter.iloc[0]
+
+with st.sidebar.form("unified_part_form"):
+    if matched_row is not None:
+        st.info(f"ℹ️ Found existing part: **{matched_row['part_number']}**")
+        val_desc = matched_row['description']
+        val_model = matched_row['model']
+        val_mrp = float(matched_row['unit_mrp'])
+        val_qty = int(matched_row['stock_qty'])
+        val_min = int(matched_row['min_threshold'])
+        submit_label = "Update Part / Stock"
+    else:
+        if input_part_no.strip():
+            st.warning("⚠️ Part not found. Fill details to add new part.")
+        val_desc = scanned_desc
+        val_model = "Universal"
+        val_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
+        val_qty = 0
+        val_min = 5
+        submit_label = "Add New Part"
+
+    f_desc = st.text_input("Description", value=val_desc)
+    f_model = st.text_input("Model", value=val_model)
+    f_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=val_mrp, step=1.0)
     
-    add_qty_val = st.sidebar.number_input("Add Quantity to Stock", min_value=1, value=1, step=1, key="quick_add_qty")
-    if st.sidebar.button("Confirm Restock"):
-        current_stock = int(df.loc[df['part_number'] == scanned_part, 'stock_qty'].values[0])
-        df.loc[df['part_number'] == scanned_part, 'stock_qty'] = current_stock + add_qty_val
-        save_data(df)
-        st.sidebar.success(f"Added {add_qty_val} units to {scanned_part}!")
-        time.sleep(1)
-        st.rerun()
-else:
-    st.sidebar.header("➕ Add New Part")
-    with st.sidebar.form("add_part_form", clear_on_submit=True):
-        new_part_no = st.text_input("Part Number", value=scanned_part)
-        new_desc = st.text_input("Description", value=scanned_desc)
-        new_model = st.text_input("Model", value="Universal")
-        
-        default_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
-        new_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=default_mrp, step=1.0)
-        
-        auto_cost = round(new_mrp * 0.84, 2) if new_mrp > 0 else 0.0
-        
-        new_qty = st.number_input("Initial Stock", min_value=0, value=1, step=1)
-        new_min = st.number_input("Min Threshold", min_value=1, value=5, step=1)
-        
-        submit_new_part = st.form_submit_button("Add to Database")
-        
-        if submit_new_part:
-            if not new_part_no.strip():
-                st.sidebar.error("Part Number is required!")
+    f_cost = round(f_mrp * 0.84, 2) if f_mrp > 0 else 0.0
+    st.caption(f"Calculated Unit Cost (MRP - 16%): ₹{f_cost}")
+
+    f_qty = st.number_input("Stock Quantity", min_value=0, value=val_qty, step=1)
+    f_min = st.number_input("Min Threshold", min_value=1, value=val_min, step=1)
+
+    submitted = st.form_submit_button(submit_label)
+
+    if submitted:
+        clean_pn = input_part_no.strip()
+        if not clean_pn:
+            st.error("Part Number cannot be empty!")
+        else:
+            if matched_row is not None:
+                df.loc[df['part_number'].astype(str).str.strip().str.upper() == clean_pn.upper(), 'description'] = f_desc.strip()
+                df.loc[df['part_number'].astype(str).str.strip().str.upper() == clean_pn.upper(), 'model'] = f_model.strip()
+                df.loc[df['part_number'].astype(str).str.strip().str.upper() == clean_pn.upper(), 'unit_mrp'] = float(f_mrp)
+                df.loc[df['part_number'].astype(str).str.strip().str.upper() == clean_pn.upper(), 'unit_cost'] = float(f_cost)
+                df.loc[df['part_number'].astype(str).str.strip().str.upper() == clean_pn.upper(), 'stock_qty'] = int(f_qty)
+                df.loc[df['part_number'].astype(str).str.strip().str.upper() == clean_pn.upper(), 'min_threshold'] = int(f_min)
+                st.success(f"Successfully updated part {clean_pn}!")
             else:
                 new_row = pd.DataFrame([{
-                    'part_number': new_part_no.strip(),
-                    'description': new_desc.strip(),
-                    'model': new_model.strip(),
-                    'unit_cost': float(auto_cost),
-                    'unit_mrp': float(new_mrp),
-                    'stock_qty': int(new_qty),
-                    'min_threshold': int(new_min),
+                    'part_number': clean_pn,
+                    'description': f_desc.strip(),
+                    'model': f_model.strip(),
+                    'unit_cost': float(f_cost),
+                    'unit_mrp': float(f_mrp),
+                    'stock_qty': int(f_qty),
+                    'min_threshold': int(f_min),
                     'units_sold': 0
                 }])
                 df = pd.concat([df, new_row], ignore_index=True)
-                save_data(df)
-                time.sleep(1)
-                st.rerun()
+                st.success(f"Successfully added new part {clean_pn}!")
+            
+            save_data(df)
+            time.sleep(1)
+            st.rerun()
 
 st.sidebar.markdown("---")
-
-st.sidebar.header("⚙️ Manual Stock Adjustment")
-if not df.empty and 'part_number' in df.columns:
-    part_options = df['part_number'].unique()
-    selected_part = st.sidebar.selectbox("Select Part to Update", part_options)
-
-    if selected_part:
-        qty_change = st.sidebar.number_input("Quantity Change (+ or -)", value=1, step=1)
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            if st.sidebar.button("Add Stock"):
-                df.loc[df['part_number'] == selected_part, 'stock_qty'] += qty_change
-                save_data(df)
-                time.sleep(1)
-                st.rerun()
-        with col2:
-            if st.sidebar.button("Record Sale"):
-                current_stock = int(df.loc[df['part_number'] == selected_part, 'stock_qty'].values[0])
-                if current_stock >= qty_change:
-                    df.loc[df['part_number'] == selected_part, 'stock_qty'] -= qty_change
-                    df.loc[df['part_number'] == selected_part, 'units_sold'] += qty_change
-                    save_data(df)
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.sidebar.error("Insufficient stock!")
 
 # --- MAIN DASHBOARD TABS ---
 if not df.empty:
@@ -303,14 +298,31 @@ if not df.empty:
         st.subheader("Interactive Master Data Editor")
         st.caption("You can freely edit item details and customize unit costs here, or perform bulk deletion of obsolete parts.")
         
-        edited_df = st.data_editor(df.drop(columns=['status'], errors='ignore'), num_rows="dynamic", key="editor")
+        editor_input_df = df.drop(columns=['status'], errors='ignore')
+        edited_df = st.data_editor(editor_input_df, num_rows="dynamic", key="editor")
         
         col_save_editor, col_bulk_del = st.columns([1, 1])
         with col_save_editor:
             if st.button("Save Changes to Google Sheet"):
-                save_data(edited_df)
-                time.sleep(1)
-                st.rerun()
+                try:
+                    for col in EXPECTED_COLS:
+                        if col not in edited_df.columns:
+                            edited_df[col] = ""
+                    
+                    num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+                    for col in num_cols:
+                        edited_df[col] = pd.to_numeric(edited_df[col], errors='coerce').fillna(0)
+                        
+                    edited_df['part_number'] = edited_df['part_number'].astype(str).str.strip()
+                    edited_df = edited_df.dropna(subset=['part_number'])
+                    edited_df = edited_df[edited_df['part_number'] != ""]
+                    
+                    save_data(edited_df)
+                    st.success("Master data changes successfully saved and synced!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving master data: {e}")
                 
         st.markdown("---")
         st.subheader("🗑️ Bulk Delete Obsolete Parts")
