@@ -140,7 +140,6 @@ def save_sale_to_cloud(new_sale_row_dict):
 # --- PDF GENERATOR FUNCTION (LANDSCAPE WITH INLINE ITEM BREAKDOWN) ---
 def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    # Using landscape letter to give plenty of horizontal room for inline item breakdown
     c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
     width, height = landscape(letter)
     
@@ -574,20 +573,11 @@ if not df.empty:
                         time_str
                     )
                     
-                    st.success("Sale completed successfully! Inventory & sales report updated.")
-                    
-                    # Provide direct download link for the generated PDF bill
                     with open(pdf_path, "rb") as pdf_file:
-                        PDF_BYTES = pdf_file.read()
+                        st.session_state['last_pdf_bytes'] = pdf_file.read()
+                        
+                    st.session_state['last_pdf_filename'] = f"Invoice_{cust_name.strip().replace(' ', '_')}_{now_stamp.strftime('%Y%m%d_%H%M%S')}.pdf"
                     
-                    st.download_button(
-                        label="📄 Download Generated Tax Invoice (PDF)",
-                        data=PDF_BYTES,
-                        file_name=f"Invoice_{cust_name.strip().replace(' ', '_')}_{now_stamp.strftime('%Y%m%d_%H%M%S')}.pdf",
-                        mime="application/pdf"
-                    )
-                    
-                    # Direct WhatsApp Click-to-Chat Share Button Option
                     cleaned_phone = re.sub(r'\D', '', cust_phone_10.strip())
                     if len(cleaned_phone) == 10:
                         full_whatsapp_number = f"{country_code.strip()}{cleaned_phone}"
@@ -597,27 +587,44 @@ if not df.empty:
                             f"Please find your official tax invoice attached."
                         )
                         encoded_wa_msg = urllib.parse.quote(wa_message)
-                        whatsapp_url = f"https://wa.me/{full_whatsapp_number}?text={encoded_wa_msg}"
-                        
-                        st.markdown(
-                            f"""
-                            <a href="{whatsapp_url}" target="_blank">
-                                <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; font-weight:bold; width:100%; margin-top:10px;">
-                                    💬 Send Bill Summary on WhatsApp
-                                </button>
-                            </a>
-                            """,
-                            unsafe_allow_html=True
-                        )
-                        st.caption("Tip: Download the PDF above first, tap the WhatsApp button to chat with the customer, and attach the downloaded PDF file!")
+                        st.session_state['last_whatsapp_url'] = f"https://wa.me/{full_whatsapp_number}?text={encoded_wa_msg}"
                     else:
-                        st.info("💡 Enter a valid 10-digit customer WhatsApp number above to enable the direct WhatsApp send button.")
+                        st.session_state['last_whatsapp_url'] = ""
 
-                    # Clean up temp file path from storage reference after serving
+                    st.session_state['sale_completed'] = True
+
                     try:
                         os.remove(pdf_path)
                     except Exception:
                         pass
+                    st.rerun()
+
+        # Display persistent checkout buttons if sale was just completed
+        if st.session_state.get('sale_completed', False):
+            st.success("Sale completed successfully! Inventory & sales report updated.")
+            
+            if 'last_pdf_bytes' in st.session_state:
+                st.download_button(
+                    label="📄 Download Generated Tax Invoice (PDF)",
+                    data=st.session_state['last_pdf_bytes'],
+                    file_name=st.session_state.get('last_pdf_filename', 'Invoice.pdf'),
+                    mime="application/pdf"
+                )
+            
+            if st.session_state.get('last_whatsapp_url'):
+                st.markdown(
+                    f"""
+                    <a href="{st.session_state['last_whatsapp_url']}" target="_blank">
+                        <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; font-weight:bold; width:100%; margin-top:10px;">
+                            💬 Send Bill Summary on WhatsApp
+                        </button>
+                    </a>
+                    """,
+                    unsafe_allow_html=True
+                )
+                st.caption("Tip: Download the PDF above first, tap the WhatsApp button to open chat with the customer, and attach your downloaded file.")
+            else:
+                st.info("💡 Enter a valid 10-digit customer WhatsApp number before checkout to activate the direct WhatsApp share button.")
 
     with tab4:
         st.subheader("Sales Performance & Monthly Profit Reports")
