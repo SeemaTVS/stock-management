@@ -114,7 +114,8 @@ def save_data(df_to_save):
 def load_sales_log():
     try:
         if WEB_APP_URL:
-            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=15)
+            # Added a strict timeout to prevent infinite hanging if the endpoint lags
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=5)
             if response.status_code == 200:
                 sales_data = response.json()
                 sales_df = pd.DataFrame(sales_data)
@@ -619,7 +620,6 @@ if not df.empty:
             for col in num_cols_s:
                 sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
 
-            # Fixed safe sorting for months selection
             unique_months = sorted(sales_df['month_year'].dropna().astype(str).unique().tolist(), reverse=True)
             months = ["All Months"] + unique_months
             selected_month = st.selectbox("Select Reporting Month", months)
