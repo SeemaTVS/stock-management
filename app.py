@@ -623,8 +623,7 @@ if not df.empty:
             for col in num_cols_s:
                 sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
 
-            months = ["All Months"] + sorted(sales_df['month_year'].astype(str).str.unique().tolist(), reverse=True)
-            selected_month = st.selectbox("Select Reporting Month", months)
+         months = ["All Months"] + sorted(df['Month'].dropna().unique().tolist())
             
             if selected_month != "All Months":
                 filtered_sales = sales_df[sales_df['month_year'] == selected_month]
