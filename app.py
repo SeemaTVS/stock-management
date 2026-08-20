@@ -10,7 +10,7 @@ import pytesseract
 import shutil
 
 # --- PDF GENERATION LIBRARIES ---
-from reportlab.lib.pagesizes import letter
+from reportlab.lib.pagesizes import letter, landscape
 from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 import tempfile
@@ -137,11 +137,12 @@ def save_sale_to_cloud(new_sale_row_dict):
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
 
-# --- PDF GENERATOR FUNCTION WITH TAX BREAKDOWN & WATERMARK ---
-def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, cgst_val, sgst_val, service_charge, discount, grand_total, transaction_time):
+# --- PDF GENERATOR FUNCTION (LANDSCAPE WITH INLINE ITEM BREAKDOWN) ---
+def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
-    c = canvas.Canvas(temp_file.name, pagesize=letter)
-    width, height = letter
+    # Using landscape letter to give plenty of horizontal room for inline item breakdown
+    c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
+    width, height = landscape(letter)
     
     title_color = colors.HexColor("#003366") 
     text_color = colors.black
@@ -149,87 +150,95 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, cgst_val, sgst_v
     # Header
     c.setFont("Helvetica-Bold", 22)
     c.setFillColor(title_color)
-    c.drawString(220, height - 50, "SEEMA TVS")
+    c.drawCentredString(width / 2, height - 40, "SEEMA TVS")
     
     c.setFont("Helvetica", 9)
     c.setFillColor(text_color)
-    c.drawString(180, height - 68, "Near Hydel Main Road, Sampurna Nagar, Palia Kalan")
-    c.drawString(230, height - 82, "Customer Care: 8052751476")
+    c.drawCentredString(width / 2, height - 55, "Near Hydel Main Road, Sampurna Nagar, Palia Kalan")
+    c.drawCentredString(width / 2, height - 68, "Customer Care: 8052751476")
     
     c.setStrokeColor(title_color)
-    c.line(50, height - 95, width - 50, height - 95)
+    c.line(40, height - 80, width - 40, height - 80)
     
     # Customer Info
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(50, height - 118, f"Customer Name: {cust_name}")
-    c.drawString(370, height - 118, f"Date: {transaction_time}")
+    c.drawString(40, height - 100, f"Customer Name: {cust_name}")
+    c.drawRightString(width - 40, height - 100, f"Date: {transaction_time}")
     
-    # Table Header (No part numbers)
-    y_table_start = height - 150
+    # Table Header (Inline Breakdown Layout)
+    y_table_start = height - 130
     c.setFont("Helvetica-Bold", 9)
-    c.drawString(50, y_table_start, "S.No.")
-    c.drawString(90, y_table_start, "Description")
-    c.drawString(310, y_table_start, "Qty")
-    c.drawString(370, y_table_start, "Price (₹)")
-    c.drawString(460, y_table_start, "Total (₹)")
+    c.drawString(40, y_table_start, "S.No.")
+    c.drawString(80, y_table_start, "Description")
+    c.drawString(320, y_table_start, "Qty")
+    c.drawString(380, y_table_start, "Base Price (Rs.)")
+    c.drawString(490, y_table_start, "CGST 9% (Rs.)")
+    c.drawString(600, y_table_start, "SGST 9% (Rs.)")
+    c.drawString(710, y_table_start, "Total MRP (Rs.)")
     
     c.setStrokeColor(colors.lightgrey)
-    c.line(50, y_table_start - 5, width - 50, y_table_start - 5)
+    c.line(40, y_table_start - 5, width - 40, y_table_start - 5)
     
     # Table Rows
     c.setFont("Helvetica", 9)
     y_pos = y_table_start - 20
     for i, item in enumerate(bill_items):
-        c.drawString(50, y_pos, str(i + 1))
+        item_base = item['mrp_total'] / 1.18
+        item_cgst = item_base * 0.09
+        item_sgst = item_base * 0.09
+        
+        c.drawString(40, y_pos, str(i + 1))
         desc = item['desc']
         if len(desc) > 45: desc = desc[:42] + "..."
-        c.drawString(90, y_pos, desc)
-        c.drawString(310, y_pos, str(item['qty']))
-        c.drawString(370, y_pos, f"{item['mrp']:.2f}")
-        c.drawString(460, y_pos, f"{item['mrp_total']:.2f}")
+        c.drawString(80, y_pos, desc)
+        c.drawString(320, y_pos, str(item['qty']))
+        c.drawString(380, y_pos, f"{item_base:.2f}")
+        c.drawString(490, y_pos, f"{item_cgst:.2f}")
+        c.drawString(600, y_pos, f"{item_sgst:.2f}")
+        c.drawString(710, y_pos, f"{item['mrp_total']:.2f}")
         y_pos -= 18
         
-    # Totals & Tax Breakdown
-    y_totals = y_pos - 20
-    c.line(300, y_totals + 12, width - 50, y_totals + 12)
+    # Totals Section
+    y_totals = y_pos - 15
+    c.line(500, y_totals + 12, width - 40, y_totals + 12)
     
     c.setFont("Helvetica", 9)
-    c.drawString(330, y_totals, "Subtotal (MRP):")
-    c.drawString(460, y_totals, f"₹{subtotal_parts:.2f}")
+    c.drawString(550, y_totals, "Subtotal Parts (MRP):")
+    c.drawRightString(width - 40, y_totals, f"Rs. {subtotal_parts:.2f}")
     
     y_totals -= 14
-    c.drawString(330, y_totals, "CGST (9%):")
-    c.drawString(460, y_totals, f"₹{cgst_val:.2f}")
+    c.drawString(550, y_totals, "Total CGST (9%):")
+    c.drawRightString(width - 40, y_totals, f"Rs. {total_cgst:.2f}")
     
     y_totals -= 14
-    c.drawString(330, y_totals, "SGST (9%):")
-    c.drawString(460, y_totals, f"₹{sgst_val:.2f}")
+    c.drawString(550, y_totals, "Total SGST (9%):")
+    c.drawRightString(width - 40, y_totals, f"Rs. {total_sgst:.2f}")
     
     if service_charge > 0:
         y_totals -= 14
-        c.drawString(330, y_totals, "Service Charge:")
-        c.drawString(460, y_totals, f"₹{service_charge:.2f}")
+        c.drawString(550, y_totals, "Service Charge:")
+        c.drawRightString(width - 40, y_totals, f"Rs. {service_charge:.2f}")
         
     if discount > 0:
         y_totals -= 14
-        c.drawString(330, y_totals, "Discount:")
-        c.drawString(460, y_totals, f"-₹{discount:.2f}")
+        c.drawString(550, y_totals, "Discount applied:")
+        c.drawRightString(width - 40, y_totals, f"-Rs. {discount:.2f}")
         
     y_totals -= 18
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(330, y_totals, "GRAND TOTAL:")
-    c.drawString(460, y_totals, f"₹{grand_total:.2f}")
+    c.drawString(550, y_totals, "GRAND TOTAL:")
+    c.drawRightString(width - 40, y_totals, f"Rs. {grand_total:.2f}")
     
     # Footer
     c.setFont("Helvetica-Oblique", 8)
     c.setFillColor(colors.grey)
-    c.drawCentredString(width / 2, 40, "Thank you for your business! Please visit again.")
+    c.drawCentredString(width / 2, 30, "Thank you for your business! Please visit again.")
     
     # Watermark
     c.saveState()
-    c.setFillAlpha(0.08)
-    c.rotate(35)
-    c.setFont("Helvetica-Bold", 75)
+    c.setFillAlpha(0.06)
+    c.rotate(25)
+    c.setFont("Helvetica-Bold", 90)
     c.setFillColor(title_color)
     c.drawString(150, -50, "SEEMA TVS")
     c.restoreState()
@@ -336,10 +345,10 @@ with st.sidebar.form("unified_part_form"):
 
     f_desc = st.text_input("Description", value=val_desc)
     f_model = st.text_input("Model", value=val_model)
-    f_mrp = st.number_input("Unit MRP (₹)", min_value=0.0, value=val_mrp, step=1.0)
+    f_mrp = st.number_input("Unit MRP (Rs.)", min_value=0.0, value=val_mrp, step=1.0)
     
     f_cost = round(f_mrp * 0.84, 2) if f_mrp > 0 else 0.0
-    st.caption(f"Calculated Unit Cost (MRP - 16%): ₹{f_cost}")
+    st.caption(f"Calculated Unit Cost (MRP - 16%): Rs. {f_cost}")
 
     f_qty = st.number_input("Stock Quantity", min_value=0, value=val_qty, step=1)
     f_min = st.number_input("Min Threshold", min_value=1, value=val_min, step=1)
@@ -451,7 +460,7 @@ if not df.empty:
         
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         
-        # WhatsApp Phone Input Setup (Country Code + 10-Digit Number)
+        # WhatsApp Phone Input Setup
         st.markdown("### 📱 Customer WhatsApp Number")
         col_cc, col_num = st.columns([1, 3])
         with col_cc:
@@ -476,7 +485,7 @@ if not df.empty:
                 
                 col_q1, col_q2 = st.columns([3, 1])
                 with col_q1:
-                    st.write(f"**{desc}** (MRP: ₹{mrp}) | Stock: {avail_qty}")
+                    st.write(f"**{desc}** (MRP: Rs. {mrp}) | Stock: {avail_qty}")
                 with col_q2:
                     qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"sale_qty_{part}")
                 
@@ -497,25 +506,25 @@ if not df.empty:
             st.markdown("---")
             col_add1, col_add2 = st.columns(2)
             with col_add1:
-                service_charge = st.number_input("Service / Labor Charge (₹)", min_value=0.0, value=0.0, step=10.0)
+                service_charge = st.number_input("Service / Labor Charge (Rs.)", min_value=0.0, value=0.0, step=10.0)
             with col_add2:
-                discount_val = st.number_input("Discount (₹)", min_value=0.0, value=0.0, step=10.0)
+                discount_val = st.number_input("Discount (Rs.)", min_value=0.0, value=0.0, step=10.0)
                 
             final_grand_total = max(0.0, parts_mrp_total + service_charge - discount_val)
             expected_net_profit = final_grand_total - parts_cost_total
             
-            # Automatic Tax Breakdown (Reverse calculation: Total / 1.18 for 18% GST split)
-            taxable_base = parts_mrp_total / 1.18
-            cgst_calculated = taxable_base * 0.09
-            sgst_calculated = taxable_base * 0.09
+            # Tax breakdown totals
+            taxable_base_total = parts_mrp_total / 1.18
+            total_cgst = taxable_base_total * 0.09
+            total_sgst = taxable_base_total * 0.09
             
             col_p1, col_p2, col_p3 = st.columns(3)
             with col_p1:
-                st.metric("Parts Total (MRP)", f"₹{parts_mrp_total:.2f}")
+                st.metric("Parts Total (MRP)", f"Rs. {parts_mrp_total:.2f}")
             with col_p2:
-                st.metric("Grand Total (Sale Price)", f"₹{final_grand_total:.2f}")
+                st.metric("Grand Total (Sale Price)", f"Rs. {final_grand_total:.2f}")
             with col_p3:
-                st.metric("Net Profit", f"₹{expected_net_profit:.2f}")
+                st.metric("Net Profit", f"Rs. {expected_net_profit:.2f}")
             
             if st.button("Complete Checkout & Generate Bill PDF", type="primary"):
                 sale_success = True
@@ -557,8 +566,8 @@ if not df.empty:
                         cust_name.strip(), 
                         bill_items, 
                         parts_mrp_total, 
-                        cgst_calculated, 
-                        sgst_calculated, 
+                        total_cgst, 
+                        total_sgst, 
                         service_charge, 
                         discount_val, 
                         final_grand_total, 
@@ -578,6 +587,32 @@ if not df.empty:
                         mime="application/pdf"
                     )
                     
+                    # Direct WhatsApp Click-to-Chat Share Button Option
+                    cleaned_phone = re.sub(r'\D', '', cust_phone_10.strip())
+                    if len(cleaned_phone) == 10:
+                        full_whatsapp_number = f"{country_code.strip()}{cleaned_phone}"
+                        wa_message = (
+                            f"Hello *{cust_name.strip()}*, thank you for visiting *SEEMA TVS*! "
+                            f"Your bill summary for total Rs. *{final_grand_total:.2f}* has been generated. "
+                            f"Please find your official tax invoice attached."
+                        )
+                        encoded_wa_msg = urllib.parse.quote(wa_message)
+                        whatsapp_url = f"https://wa.me/{full_whatsapp_number}?text={encoded_wa_msg}"
+                        
+                        st.markdown(
+                            f"""
+                            <a href="{whatsapp_url}" target="_blank">
+                                <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; font-weight:bold; width:100%; margin-top:10px;">
+                                    💬 Send Bill Summary on WhatsApp
+                                </button>
+                            </a>
+                            """,
+                            unsafe_allow_html=True
+                        )
+                        st.caption("Tip: Download the PDF above first, tap the WhatsApp button to chat with the customer, and attach the downloaded PDF file!")
+                    else:
+                        st.info("💡 Enter a valid 10-digit customer WhatsApp number above to enable the direct WhatsApp send button.")
+
                     # Clean up temp file path from storage reference after serving
                     try:
                         os.remove(pdf_path)
@@ -606,11 +641,11 @@ if not df.empty:
             with m_col1:
                 st.metric("Total Transactions", len(filtered_sales))
             with m_col2:
-                st.metric("Total Revenue (Sales)", f"₹{filtered_sales['grand_total'].sum():,.2f}")
+                st.metric("Total Revenue (Sales)", f"Rs. {filtered_sales['grand_total'].sum():,.2f}")
             with m_col3:
-                st.metric("Total Costs", f"₹{filtered_sales['total_cost'].sum():,.2f}")
+                st.metric("Total Costs", f"Rs. {filtered_sales['total_cost'].sum():,.2f}")
             with m_col4:
-                st.metric("Net Profit", f"₹{filtered_sales['net_profit'].sum():,.2f}")
+                st.metric("Net Profit", f"Rs. {filtered_sales['net_profit'].sum():,.2f}")
 
             st.markdown("---")
             st.markdown("### Transaction Log & Details")
