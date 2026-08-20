@@ -114,15 +114,16 @@ def save_data(df_to_save):
 def load_sales_log():
     try:
         if WEB_APP_URL:
-            # Added a strict timeout to prevent infinite hanging if the endpoint lags
-            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=5)
+            # Shortened timeout to 3 seconds with allow_redirects to handle script shifts cleanly
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=3, allow_redirects=True)
             if response.status_code == 200:
                 sales_data = response.json()
-                sales_df = pd.DataFrame(sales_data)
-                for col in SALES_COLS:
-                    if col not in sales_df.columns:
-                        sales_df[col] = ""
-                return sales_df
+                if isinstance(sales_data, list):
+                    sales_df = pd.DataFrame(sales_data)
+                    for col in SALES_COLS:
+                        if col not in sales_df.columns:
+                            sales_df[col] = ""
+                    return sales_df
     except Exception:
         pass
     return pd.DataFrame(columns=SALES_COLS)
