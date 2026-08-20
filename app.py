@@ -2,11 +2,9 @@ import streamlit as st
 import pandas as pd
 import re
 import requests
-import io
 import time
 import os
 from PIL import Image
-import pytesseract
 import shutil
 
 # --- PDF GENERATION LIBRARIES ---
@@ -16,12 +14,17 @@ from reportlab.lib import colors
 import tempfile
 import urllib.parse
 
-# Automatically find Tesseract whether running locally or on Streamlit Cloud
-tesseract_path = shutil.which("tesseract")
-if tesseract_path:
-    pytesseract.pytesseract.tesseract_cmd = tesseract_path
-else:
-    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Safe Tesseract Setup with fallback
+try:
+    tesseract_path = shutil.which("tesseract")
+    if tesseract_path:
+        import pytesseract
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
+    else:
+        import pytesseract
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+except Exception:
+    pass
 
 st.set_page_config(
     page_title="TVS Agency Inventory Dashboard", 
@@ -44,6 +47,7 @@ CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
 EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
 SALES_COLS = ['timestamp', 'customer_name', 'items_detail', 'parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit', 'month_year']
 
+@st.cache_data(ttl=10)
 def load_data():
     try:
         cache_buster = int(time.time())
@@ -62,7 +66,7 @@ def load_data():
         df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
         return df_loaded
     except Exception as e:
-        st.error(f"Load error: {e}")
+        st.warning(f"Could not load online Google Sheet, using empty fallback. Details: {e}")
         return pd.DataFrame(columns=EXPECTED_COLS)
 
 def save_data(df_to_save):
@@ -102,7 +106,7 @@ def save_data(df_to_save):
                     "type": "inventory",
                     "data": clean_records
                 }
-                response = requests.post(WEB_APP_URL, json=payload, timeout=15)
+                response = requests.post(WEB_APP_URL, json=payload, timeout=10)
                 
             if response.status_code == 200:
                 st.sidebar.success("Successfully synced!")
@@ -114,8 +118,7 @@ def save_data(df_to_save):
 def load_sales_log():
     try:
         if WEB_APP_URL:
-            # Shortened timeout to 3 seconds with allow_redirects to handle script shifts cleanly
-            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=3, allow_redirects=True)
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=2, allow_redirects=True)
             if response.status_code == 200:
                 sales_data = response.json()
                 if isinstance(sales_data, list):
@@ -135,7 +138,7 @@ def save_sale_to_cloud(new_sale_row_dict):
                 "type": "sale",
                 "data": new_sale_row_dict
             }
-            requests.post(WEB_APP_URL, json=payload, timeout=15)
+            requests.post(WEB_APP_URL, json=payload, timeout=10)
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
 
@@ -148,7 +151,6 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     title_color = colors.HexColor("#003366") 
     text_color = colors.black
     
-    # Header
     c.setFont("Helvetica-Bold", 22)
     c.setFillColor(title_color)
     c.drawCentredString(width / 2, height - 40, "SEEMA TVS")
@@ -161,12 +163,10 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     c.setStrokeColor(title_color)
     c.line(40, height - 80, width - 40, height - 80)
     
-    # Customer Info
     c.setFont("Helvetica-Bold", 10)
     c.drawString(40, height - 100, f"Customer Name: {cust_name}")
     c.drawRightString(width - 40, height - 100, f"Date: {transaction_time}")
     
-    # Table Header
     y_table_start = height - 130
     c.setFont("Helvetica-Bold", 9)
     c.drawString(40, y_table_start, "S.No.")
@@ -180,7 +180,6 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     c.setStrokeColor(colors.lightgrey)
     c.line(40, y_table_start - 5, width - 40, y_table_start - 5)
     
-    # Table Rows
     c.setFont("Helvetica", 9)
     y_pos = y_table_start - 20
     for i, item in enumerate(bill_items):
@@ -199,7 +198,6 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
         c.drawString(710, y_pos, f"{item['mrp_total']:.2f}")
         y_pos -= 18
         
-    # Totals Section
     y_totals = y_pos - 15
     c.line(500, y_totals + 12, width - 40, y_totals + 12)
     
@@ -218,12 +216,10 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     c.drawString(550, y_totals, "GRAND TOTAL:")
     c.drawRightString(width - 40, y_totals, f"Rs. {grand_total:.2f}")
     
-    # Footer
     c.setFont("Helvetica-Oblique", 8)
     c.setFillColor(colors.grey)
     c.drawCentredString(width / 2, 30, "Thank you for your business! Please visit again.")
     
-    # Watermark
     c.saveState()
     c.setFillAlpha(0.06)
     c.rotate(25)
@@ -236,9 +232,10 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     temp_file.close()
     return temp_file.name
 
-# Load data and sales log
-df = load_data()
-sales_df = load_sales_log()
+# Safely load data with a progress placeholder so it never appears "frozen"
+with st.spinner("Loading application data..."):
+    df = load_data()
+    sales_df = load_sales_log()
 
 def parse_tvs_label(scanned_text):
     part_no = ""
@@ -379,7 +376,9 @@ with st.sidebar.form("unified_part_form"):
 st.sidebar.markdown("---")
 
 # --- MAIN DASHBOARD TABS ---
-if not df.empty:
+if df.empty:
+    st.warning("⚠️ Inventory dataset is currently empty. Use the sidebar on the left to add your first part number or check your Google Sheet export URL connection.")
+else:
     def calculate_status(row):
         if row['stock_qty'] == 0:
             return "OUT OF STOCK"
