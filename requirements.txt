@@ -4,4 +4,5 @@ gspread
 google-auth
 openpyxl
 pytesseract
-
+reportlab
+Pillow
