@@ -137,7 +137,7 @@ def save_sale_to_cloud(new_sale_row_dict):
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
 
-# --- PDF GENERATOR FUNCTION (LANDSCAPE WITH INLINE ITEM BREAKDOWN & CLEAN BOTTOM) ---
+# --- PDF GENERATOR FUNCTION ---
 def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
@@ -164,7 +164,7 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     c.drawString(40, height - 100, f"Customer Name: {cust_name}")
     c.drawRightString(width - 40, height - 100, f"Date: {transaction_time}")
     
-    # Table Header (Inline Breakdown Layout)
+    # Table Header
     y_table_start = height - 130
     c.setFont("Helvetica-Bold", 9)
     c.drawString(40, y_table_start, "S.No.")
@@ -197,7 +197,7 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
         c.drawString(710, y_pos, f"{item['mrp_total']:.2f}")
         y_pos -= 18
         
-    # Totals Section (Cleaned: Only service charge, discount, and Grand Total)
+    # Totals Section
     y_totals = y_pos - 15
     c.line(500, y_totals + 12, width - 40, y_totals + 12)
     
@@ -234,7 +234,7 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     temp_file.close()
     return temp_file.name
 
-# Load data and sales log correctly on startup
+# Load data and sales log
 df = load_data()
 sales_df = load_sales_log()
 
@@ -298,7 +298,7 @@ if uploaded_photo:
 
 st.sidebar.markdown("---")
 
-# --- UNIFIED PART MANAGER (Lookup / Add / Modify) ---
+# --- UNIFIED PART MANAGER ---
 st.sidebar.header("📦 Part Manager & Stock Control")
 
 if "lookup_part_input" not in st.session_state:
@@ -448,7 +448,6 @@ if not df.empty:
         
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         
-        # WhatsApp Phone Input Setup
         st.markdown("### 📱 Customer WhatsApp Number")
         col_cc, col_num = st.columns([1, 3])
         with col_cc:
@@ -501,7 +500,6 @@ if not df.empty:
             final_grand_total = max(0.0, parts_mrp_total + service_charge - discount_val)
             expected_net_profit = final_grand_total - parts_cost_total
             
-            # Tax breakdown totals
             taxable_base_total = parts_mrp_total / 1.18
             total_cgst = taxable_base_total * 0.09
             total_sgst = taxable_base_total * 0.09
@@ -549,7 +547,6 @@ if not df.empty:
                     
                     save_sale_to_cloud(new_sale_dict)
                     
-                    # Generate temporary PDF invoice
                     pdf_path = generate_invoice_pdf(
                         cust_name.strip(), 
                         bill_items, 
@@ -588,7 +585,6 @@ if not df.empty:
                         pass
                     st.rerun()
 
-        # Display persistent checkout buttons if sale was just completed
         if st.session_state.get('sale_completed', False):
             st.success("Sale completed successfully! Inventory & sales report updated.")
             
@@ -623,7 +619,10 @@ if not df.empty:
             for col in num_cols_s:
                 sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
 
-         months = ["All Months"] + sorted(df['Month'].dropna().unique().tolist())
+            # Fixed safe sorting for months selection
+            unique_months = sorted(sales_df['month_year'].dropna().astype(str).unique().tolist(), reverse=True)
+            months = ["All Months"] + unique_months
+            selected_month = st.selectbox("Select Reporting Month", months)
             
             if selected_month != "All Months":
                 filtered_sales = sales_df[sales_df['month_year'] == selected_month]
@@ -652,3 +651,5 @@ if not df.empty:
                 file_name=f"Sales_Report_{selected_month}.csv",
                 mime="text/csv"
             )
+        else:
+            st.info("No sales transactions found yet.")
