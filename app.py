@@ -9,6 +9,13 @@ from PIL import Image
 import pytesseract
 import shutil
 
+# --- PDF GENERATION LIBRARIES ---
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib import colors
+import tempfile
+import urllib.parse
+
 # Automatically find Tesseract whether running locally or on Streamlit Cloud
 tesseract_path = shutil.which("tesseract")
 if tesseract_path:
@@ -129,6 +136,107 @@ def save_sale_to_cloud(new_sale_row_dict):
             requests.post(WEB_APP_URL, json=payload, timeout=15)
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
+
+# --- PDF GENERATOR FUNCTION WITH TAX BREAKDOWN & WATERMARK ---
+def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, cgst_val, sgst_val, service_charge, discount, grand_total, transaction_time):
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
+    c = canvas.Canvas(temp_file.name, pagesize=letter)
+    width, height = letter
+    
+    title_color = colors.HexColor("#003366") 
+    text_color = colors.black
+    
+    # Header
+    c.setFont("Helvetica-Bold", 22)
+    c.setFillColor(title_color)
+    c.drawString(220, height - 50, "SEEMA TVS")
+    
+    c.setFont("Helvetica", 9)
+    c.setFillColor(text_color)
+    c.drawString(180, height - 68, "Near Hydel Main Road, Sampurna Nagar, Palia Kalan")
+    c.drawString(230, height - 82, "Customer Care: 8052751476")
+    
+    c.setStrokeColor(title_color)
+    c.line(50, height - 95, width - 50, height - 95)
+    
+    # Customer Info
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(50, height - 118, f"Customer Name: {cust_name}")
+    c.drawString(370, height - 118, f"Date: {transaction_time}")
+    
+    # Table Header (No part numbers)
+    y_table_start = height - 150
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(50, y_table_start, "S.No.")
+    c.drawString(90, y_table_start, "Description")
+    c.drawString(310, y_table_start, "Qty")
+    c.drawString(370, y_table_start, "Price (₹)")
+    c.drawString(460, y_table_start, "Total (₹)")
+    
+    c.setStrokeColor(colors.lightgrey)
+    c.line(50, y_table_start - 5, width - 50, y_table_start - 5)
+    
+    # Table Rows
+    c.setFont("Helvetica", 9)
+    y_pos = y_table_start - 20
+    for i, item in enumerate(bill_items):
+        c.drawString(50, y_pos, str(i + 1))
+        desc = item['desc']
+        if len(desc) > 45: desc = desc[:42] + "..."
+        c.drawString(90, y_pos, desc)
+        c.drawString(310, y_pos, str(item['qty']))
+        c.drawString(370, y_pos, f"{item['mrp']:.2f}")
+        c.drawString(460, y_pos, f"{item['mrp_total']:.2f}")
+        y_pos -= 18
+        
+    # Totals & Tax Breakdown
+    y_totals = y_pos - 20
+    c.line(300, y_totals + 12, width - 50, y_totals + 12)
+    
+    c.setFont("Helvetica", 9)
+    c.drawString(330, y_totals, "Subtotal (MRP):")
+    c.drawString(460, y_totals, f"₹{subtotal_parts:.2f}")
+    
+    y_totals -= 14
+    c.drawString(330, y_totals, "CGST (9%):")
+    c.drawString(460, y_totals, f"₹{cgst_val:.2f}")
+    
+    y_totals -= 14
+    c.drawString(330, y_totals, "SGST (9%):")
+    c.drawString(460, y_totals, f"₹{sgst_val:.2f}")
+    
+    if service_charge > 0:
+        y_totals -= 14
+        c.drawString(330, y_totals, "Service Charge:")
+        c.drawString(460, y_totals, f"₹{service_charge:.2f}")
+        
+    if discount > 0:
+        y_totals -= 14
+        c.drawString(330, y_totals, "Discount:")
+        c.drawString(460, y_totals, f"-₹{discount:.2f}")
+        
+    y_totals -= 18
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(330, y_totals, "GRAND TOTAL:")
+    c.drawString(460, y_totals, f"₹{grand_total:.2f}")
+    
+    # Footer
+    c.setFont("Helvetica-Oblique", 8)
+    c.setFillColor(colors.grey)
+    c.drawCentredString(width / 2, 40, "Thank you for your business! Please visit again.")
+    
+    # Watermark
+    c.saveState()
+    c.setFillAlpha(0.08)
+    c.rotate(35)
+    c.setFont("Helvetica-Bold", 75)
+    c.setFillColor(title_color)
+    c.drawString(150, -50, "SEEMA TVS")
+    c.restoreState()
+    
+    c.save()
+    temp_file.close()
+    return temp_file.name
 
 df = load_data()
 sales_df = load_sales_log()
@@ -339,9 +447,18 @@ if not df.empty:
 
     with tab3:
         st.subheader("Record New Sale Transaction")
-        st.caption("Select sold items, apply service charges or discounts, and complete checkout to update inventory and sales reports.")
+        st.caption("Select sold items, enter customer WhatsApp number, and complete checkout to generate the invoice.")
         
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
+        
+        # WhatsApp Phone Input Setup (Country Code + 10-Digit Number)
+        st.markdown("### 📱 Customer WhatsApp Number")
+        col_cc, col_num = st.columns([1, 3])
+        with col_cc:
+            country_code = st.text_input("Code", value="91")
+        with col_num:
+            cust_phone_10 = st.text_input("10-Digit WhatsApp Number", max_chars=10, placeholder="e.g. 6380965289")
+
         selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="sale_parts_select")
         
         bill_items = []
@@ -359,7 +476,7 @@ if not df.empty:
                 
                 col_q1, col_q2 = st.columns([3, 1])
                 with col_q1:
-                    st.write(f"**{part}** - {desc} (MRP: ₹{mrp} | Cost: ₹{cost}) | Stock: {avail_qty}")
+                    st.write(f"**{desc}** (MRP: ₹{mrp}) | Stock: {avail_qty}")
                 with col_q2:
                     qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"sale_qty_{part}")
                 
@@ -387,6 +504,11 @@ if not df.empty:
             final_grand_total = max(0.0, parts_mrp_total + service_charge - discount_val)
             expected_net_profit = final_grand_total - parts_cost_total
             
+            # Automatic Tax Breakdown (Reverse calculation: Total / 1.18 for 18% GST split)
+            taxable_base = parts_mrp_total / 1.18
+            cgst_calculated = taxable_base * 0.09
+            sgst_calculated = taxable_base * 0.09
+            
             col_p1, col_p2, col_p3 = st.columns(3)
             with col_p1:
                 st.metric("Parts Total (MRP)", f"₹{parts_mrp_total:.2f}")
@@ -395,7 +517,7 @@ if not df.empty:
             with col_p3:
                 st.metric("Net Profit", f"₹{expected_net_profit:.2f}")
             
-            if st.button("Complete Checkout & Record Sale", type="primary"):
+            if st.button("Complete Checkout & Generate Bill PDF", type="primary"):
                 sale_success = True
                 for item in bill_items:
                     p_no = item["part"]
@@ -412,10 +534,11 @@ if not df.empty:
                     save_data(df)
                     
                     now_stamp = pd.Timestamp.now()
-                    items_summary = "; ".join([f"{i['part']} ({i['desc']}) x{i['qty']}" for i in bill_items])
+                    time_str = now_stamp.strftime('%Y-%m-%d %H:%M:%S')
+                    items_summary = "; ".join([f"{i['desc']} x{i['qty']}" for i in bill_items])
                     
                     new_sale_dict = {
-                        'timestamp': now_stamp.strftime('%Y-%m-%d %H:%M:%S'),
+                        'timestamp': time_str,
                         'customer_name': cust_name.strip(),
                         'items_detail': items_summary,
                         'parts_total': float(parts_mrp_total),
@@ -429,9 +552,37 @@ if not df.empty:
                     
                     save_sale_to_cloud(new_sale_dict)
                     
-                    st.success("Sale completed! Inventory updated and transaction saved to reports.")
-                    time.sleep(1)
-                    st.rerun()
+                    # Generate temporary PDF invoice
+                    pdf_path = generate_invoice_pdf(
+                        cust_name.strip(), 
+                        bill_items, 
+                        parts_mrp_total, 
+                        cgst_calculated, 
+                        sgst_calculated, 
+                        service_charge, 
+                        discount_val, 
+                        final_grand_total, 
+                        time_str
+                    )
+                    
+                    st.success("Sale completed successfully! Inventory & sales report updated.")
+                    
+                    # Provide direct download link for the generated PDF bill
+                    with open(pdf_path, "rb") as pdf_file:
+                        PDF_BYTES = pdf_file.read()
+                    
+                    st.download_button(
+                        label="📄 Download Generated Tax Invoice (PDF)",
+                        data=PDF_BYTES,
+                        file_name=f"Invoice_{cust_name.strip().replace(' ', '_')}_{now_stamp.strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf"
+                    )
+                    
+                    # Clean up temp file path from storage reference after serving
+                    try:
+                        os.remove(pdf_path)
+                    except Exception:
+                        pass
 
     with tab4:
         st.subheader("Sales Performance & Monthly Profit Reports")
@@ -471,20 +622,3 @@ if not df.empty:
                 file_name=f"Sales_Report_{selected_month}.csv",
                 mime="text/csv"
             )
-            
-            st.dataframe(
-                filtered_sales[['timestamp', 'customer_name', 'items_detail', 'grand_total', 'total_cost', 'net_profit', 'month_year']],
-                use_container_width=True
-            )
-            
-            with st.expander("🔍 View Detailed Line-by-Line Transactions"):
-                for idx, row in filtered_sales.iloc[::-1].iterrows():
-                    st.markdown(f"**Date:** {row['timestamp']} | **Customer:** {row['customer_name']} | **Month:** {row['month_year']}")
-                    st.write(f"**Items:** {row['items_detail']}")
-                    st.write(f"Parts Subtotal: ₹{row['parts_total']:.2f} | Service: +₹{row['service_charge']:.2f} | Discount: -₹{row['discount']:.2f}")
-                    st.write(f"**Grand Total:** ₹{row['grand_total']:.2f} | **Unit Costs:** ₹{row['total_cost']:.2f} | **Profit:** ₹{row['net_profit']:.2f}")
-                    st.divider()
-        else:
-            st.info("No sales recorded yet. Use the 'Record Sale' tab to log your first transaction!")
-else:
-    st.info("Your inventory database is currently empty.")
