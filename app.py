@@ -137,7 +137,7 @@ def save_sale_to_cloud(new_sale_row_dict):
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
 
-# --- PDF GENERATOR FUNCTION (LANDSCAPE WITH INLINE ITEM BREAKDOWN) ---
+# --- PDF GENERATOR FUNCTION (LANDSCAPE WITH INLINE ITEM BREAKDOWN & CLEAN BOTTOM) ---
 def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
@@ -197,33 +197,21 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
         c.drawString(710, y_pos, f"{item['mrp_total']:.2f}")
         y_pos -= 18
         
-    # Totals Section
+    # Totals Section (Cleaned: Only service charge, discount, and Grand Total)
     y_totals = y_pos - 15
     c.line(500, y_totals + 12, width - 40, y_totals + 12)
     
     c.setFont("Helvetica", 9)
-    c.drawString(550, y_totals, "Subtotal Parts (MRP):")
-    c.drawRightString(width - 40, y_totals, f"Rs. {subtotal_parts:.2f}")
-    
-    y_totals -= 14
-    c.drawString(550, y_totals, "Total CGST (9%):")
-    c.drawRightString(width - 40, y_totals, f"Rs. {total_cgst:.2f}")
-    
-    y_totals -= 14
-    c.drawString(550, y_totals, "Total SGST (9%):")
-    c.drawRightString(width - 40, y_totals, f"Rs. {total_sgst:.2f}")
-    
     if service_charge > 0:
-        y_totals -= 14
         c.drawString(550, y_totals, "Service Charge:")
         c.drawRightString(width - 40, y_totals, f"Rs. {service_charge:.2f}")
+        y_totals -= 14
         
     if discount > 0:
-        y_totals -= 14
         c.drawString(550, y_totals, "Discount applied:")
         c.drawRightString(width - 40, y_totals, f"-Rs. {discount:.2f}")
+        y_totals -= 14
         
-    y_totals -= 18
     c.setFont("Helvetica-Bold", 10)
     c.drawString(550, y_totals, "GRAND TOTAL:")
     c.drawRightString(width - 40, y_totals, f"Rs. {grand_total:.2f}")
@@ -246,6 +234,7 @@ def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, tota
     temp_file.close()
     return temp_file.name
 
+# Load data and sales log correctly on startup
 df = load_data()
 sales_df = load_sales_log()
 
@@ -634,7 +623,7 @@ if not df.empty:
             for col in num_cols_s:
                 sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
 
-            months = ["All Months"] + sorted(sales_df['month_year'].astype(str).unique().tolist(), reverse=True)
+            months = ["All Months"] + sorted(sales_df['month_year'].astype(str).str.unique().tolist(), reverse=True)
             selected_month = st.selectbox("Select Reporting Month", months)
             
             if selected_month != "All Months":
