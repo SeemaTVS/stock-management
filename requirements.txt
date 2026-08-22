@@ -6,4 +6,3 @@ openpyxl
 pytesseract
 reportlab
 Pillow
-streamlit-gsheets
