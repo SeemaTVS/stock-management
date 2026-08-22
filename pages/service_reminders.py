@@ -1,57 +1,36 @@
 import datetime
 from datetime import timedelta
-import gspread
-from google.oauth2.service_account import Credentials
 import pandas as pd
 import streamlit as st
 
 st.title("TVS Agency Service Reminder Portal")
 
 
-@st.cache_resource
-def get_service_worksheet():
-  scope = [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive",
-  ]
-  credentials_dict = dict(st.secrets["gcp_service_account"])
-  creds = Credentials.from_service_account_info(
-      credentials_dict, scopes=scope
-  )
-  client = gspread.authorize(creds)
-
-  # Open your exact Google Sheet using its unique ID from the link
-  spreadsheet = client.open_by_key(
-      "1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM"
-  )
-
-  # Try to select the 'Service_Reminders' tab, or create it if it doesn't exist
-  try:
-    worksheet = spreadsheet.worksheet("Service_Reminders")
-  except gspread.exceptions.WorksheetNotFound:
-    worksheet = spreadsheet.add_worksheet(
-        title="Service_Reminders", rows="1000", cols="8"
-    )
-    worksheet.append_row([
-        "Name",
-        "Phone",
-        "Bike",
-        "Free_Services_Count",
-        "Purchase_Date",
-        "Current_Service_Stage",
-        "Next_Due_Date",
-        "Status",
-    ])
-
-  return worksheet
-
-
-sheet = get_service_worksheet()
-
-
+# Use Streamlit's built-in connection to fetch the exact Google Sheet
 def load_data():
-  data = sheet.get_all_records()
-  if not data:
+  try:
+    # Connects using the default gsheets connection
+    conn = st.connection("gsheets", type="gsheets")
+    # Read from the 'Service_Reminders' worksheet
+    df = conn.read(
+        spreadsheet="1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM",
+        worksheet="Service_Reminders",
+        ttl=0,
+    )
+    if df.empty or "Name" not in df.columns:
+      return pd.DataFrame(columns=[
+          "Name",
+          "Phone",
+          "Bike",
+          "Free_Services_Count",
+          "Purchase_Date",
+          "Current_Service_Stage",
+          "Next_Due_Date",
+          "Status",
+      ])
+    return df
+  except Exception:
+    # Fallback to empty if tab doesn't exist yet
     return pd.DataFrame(columns=[
         "Name",
         "Phone",
@@ -62,7 +41,19 @@ def load_data():
         "Next_Due_Date",
         "Status",
     ])
-  return pd.DataFrame(data)
+
+
+def save_new_row(new_data_dict):
+  conn = st.connection("gsheets", type="gsheets")
+  existing_df = load_data()
+  updated_df = pd.concat(
+      [existing_df, pd.DataFrame([new_data_dict])], ignore_index=True
+  )
+  conn.update(
+      spreadsheet="1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM",
+      worksheet="Service_Reminders",
+      data=updated_df,
+  )
 
 
 df = load_data()
@@ -92,21 +83,21 @@ if menu == "Add New Customer":
         next_due = purchase_date + timedelta(days=60)
         stage = "1st Service (Free)"
 
-        new_row = [
-            name,
-            str(phone),
-            bike,
-            int(free_services_count),
-            str(purchase_date),
-            stage,
-            str(next_due),
-            "Pending",
-        ]
+        row_data = {
+            "Name": name,
+            "Phone": str(phone),
+            "Bike": bike,
+            "Free_Services_Count": int(free_services_count),
+            "Purchase_Date": str(purchase_date),
+            "Current_Service_Stage": stage,
+            "Next_Due_Date": str(next_due),
+            "Status": "Pending",
+        }
 
-        sheet.append_row(new_row)
+        save_new_row(row_data)
         st.success(
-            f"Customer {name} saved to Google Sheet tab 'Service_Reminders'!"
-            f" Scheduled for {stage} on {next_due.strftime('%d-%m-%Y')}."
+            f"Customer {name} saved to Google Sheets! Scheduled for {stage} on"
+            f" {next_due.strftime('%d-%m-%Y')}."
         )
       else:
         st.error("Please fill in at least the customer name and phone number.")
@@ -114,7 +105,7 @@ if menu == "Add New Customer":
 elif menu == "View Due Reminders":
   st.subheader("Service Calls Due Today & Overdue")
   df = load_data()
-  if not df.empty:
+  if not df.empty and "Next_Due_Date" in df.columns:
     today = str(datetime.date.today())
     due_filter = (df["Next_Due_Date"] <= today) & (df["Status"] == "Pending")
     due_df = df[due_filter]
@@ -134,7 +125,6 @@ elif menu == "View Due Reminders":
             if st.button(
                 f"Mark as Called & Advance Schedule", key=f"call_{index}"
             ):
-              sheet_row_idx = index + 2  # Header is row 1
               current_stage = row["Current_Service_Stage"]
               free_limit = int(row["Free_Services_Count"])
               base_date = datetime.date.today()
@@ -169,9 +159,17 @@ elif menu == "View Due Reminders":
                   next_stage = "Subsequent Service (Paid)"
                   next_due_calc = base_date + timedelta(days=180)
 
-              sheet.update_cell(sheet_row_idx, 6, next_stage)
-              sheet.update_cell(sheet_row_idx, 7, str(next_due_calc))
-              sheet.update_cell(sheet_row_idx, 8, "Pending")
+              df.at[index, "Current_Service_Stage"] = next_stage
+              df.at[index, "Next_Due_Date"] = str(next_due_calc)
+              df.at[index, "Status"] = "Pending"
+
+              # Update the entire sheet via connection
+              conn = st.connection("gsheets", type="gsheets")
+              conn.update(
+                  spreadsheet="1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM",
+                  worksheet="Service_Reminders",
+                  data=df,
+              )
 
               st.success(
                   f"Call logged. Next schedule updated to {next_stage} on"
