@@ -48,12 +48,12 @@ if menu == "Add New Customer":
     submitted = st.form_submit_button("Save Customer & Schedule")
     if submitted:
       if name and phone:
+        # Initial schedule offset for 1st service
         if free_services_count == 4:
-          next_due = purchase_date + timedelta(days=60)
-          stage = "1st Free Service"
+          next_due = purchase_date + timedelta(days=60)  # 2 months
         else:
-          next_due = purchase_date + timedelta(days=30)
-          stage = "1st Free Service"
+          next_due = purchase_date + timedelta(days=60)  # 1-2 months (~60 days)
+        stage = "1st Service (Free)"
 
         new_row = pd.DataFrame({
             "Name": [name],
@@ -101,37 +101,48 @@ elif menu == "View Due Reminders":
               base_date = datetime.date.today()
 
               next_stage = current_stage
-              next_due_calc = base_date + timedelta(days=90)
+              next_due_calc = base_date + timedelta(days=180)  # default fallback
 
               if free_limit == 4:
                 if "1st" in current_stage:
-                  next_stage = "2nd Free Service"
-                  next_due_calc = base_date + timedelta(days=60)
+                  next_stage = "2nd Service (Free)"
+                  next_due_calc = base_date + timedelta(days=120)  # 4 months
                 elif "2nd" in current_stage:
-                  next_stage = "3rd Free Service"
-                  next_due_calc = base_date + timedelta(days=120)
+                  next_stage = "3rd Service (Free)"
+                  next_due_calc = base_date + timedelta(days=240)  # 8 months
                 elif "3rd" in current_stage:
-                  next_stage = "4th Free Service"
-                  next_due_calc = base_date + timedelta(days=120)
+                  next_stage = "4th Service (Free)"
+                  next_due_calc = base_date + timedelta(days=365)  # 12 months
                 elif "4th" in current_stage:
-                  next_stage = "1st Paid Service"
+                  next_stage = "5th Service (Paid)"
                   next_due_calc = base_date + timedelta(days=90)
                 else:
-                  next_stage = "Next Paid Service"
+                  next_stage = "Next Service (Paid)"
                   next_due_calc = base_date + timedelta(days=90)
-              else:
+              else:  # 3 Free Services schedule based on your screenshots
                 if "1st" in current_stage:
-                  next_stage = "2nd Free Service"
-                  next_due_calc = base_date + timedelta(days=90)
+                  next_stage = "2nd Service (Free)"
+                  next_due_calc = base_date + timedelta(
+                      days=180
+                  )  # 6 months (~180 days)
                 elif "2nd" in current_stage:
-                  next_stage = "3rd Free Service"
-                  next_due_calc = base_date + timedelta(days=120)
+                  next_stage = "3rd Service (Free)"
+                  next_due_calc = base_date + timedelta(
+                      days=365
+                  )  # 12 months (1 year)
                 elif "3rd" in current_stage:
-                  next_stage = "1st Paid Service"
-                  next_due_calc = base_date + timedelta(days=90)
+                  next_stage = "4th Service (Paid)"
+                  next_due_calc = base_date + timedelta(
+                      days=548
+                  )  # 18 months (~1.5 years)
+                elif "4th" in current_stage:
+                  next_stage = "Subsequent Service (Paid)"
+                  next_due_calc = base_date + timedelta(
+                      days=180
+                  )  # Every 6 months
                 else:
-                  next_stage = "Next Paid Service"
-                  next_due_calc = base_date + timedelta(days=90)
+                  next_stage = "Subsequent Service (Paid)"
+                  next_due_calc = base_date + timedelta(days=180)
 
               df.at[index, "Current_Service_Stage"] = next_stage
               df.at[index, "Next_Due_Date"] = str(next_due_calc)
