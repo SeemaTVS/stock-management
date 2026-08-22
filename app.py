@@ -4,6 +4,7 @@ import re
 import requests
 import time
 import os
+import threading
 from PIL import Image
 import shutil
 
@@ -66,6 +67,14 @@ def load_data():
         df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
         return df_loaded
     except Exception as e:
+        # Emergency Local Backup Fallback
+        if os.path.exists("inventory_backup.csv"):
+            try:
+                df_loaded = pd.read_csv("inventory_backup.csv")
+                st.warning("⚠️ Network/Google Sheet unreachable. Loaded from local emergency backup file.")
+                return df_loaded
+            except Exception:
+                pass
         st.warning(f"Could not load online Google Sheet, using empty fallback. Details: {e}")
         return pd.DataFrame(columns=EXPECTED_COLS)
 
@@ -88,6 +97,9 @@ def save_data(df_to_save):
             
         df_to_save = df_to_save.dropna(subset=['part_number'])
         df_to_save = df_to_save[df_to_save['part_number'] != ""]
+
+        # Always save local safety snapshot immediately
+        df_to_save.to_csv("inventory_backup.csv", index=False)
 
         if WEB_APP_URL:
             with st.spinner("Syncing changes to Google Sheet..."):
@@ -114,6 +126,23 @@ def save_data(df_to_save):
                 st.sidebar.error(f"Sync failed: {response.status_code}")
     except Exception as e:
         st.sidebar.error(f"Float/Sync error: {e}")
+
+# --- BACKGROUND AUTOMATIC BACKUP WORKER ---
+def background_backup_worker():
+    while True:
+        time.sleep(3600)  # Runs every 1 hour
+        try:
+            if os.path.exists("inventory_backup.csv"):
+                timestamp_name = f"backups/inventory_backup_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+                os.makedirs("backups", exist_ok=True)
+                shutil.copy("inventory_backup.csv", timestamp_name)
+        except Exception:
+            pass
+
+if not st.session_state.get('backup_thread_started', False):
+    st.session_state['backup_thread_started'] = True
+    bg_thread = threading.Thread(target=background_backup_worker, daemon=True)
+    bg_thread.start()
 
 def load_sales_log():
     try:
@@ -444,15 +473,15 @@ else:
 
     with tab3:
         st.subheader("Record New Sale Transaction")
-        st.caption("Select sold items, enter customer WhatsApp number, and complete checkout to generate the invoice.")
+        st.caption("Select sold items, enter customer WhatsApp number side-by-side, and complete checkout to generate the invoice.")
         
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         
         st.markdown("### 📱 Customer WhatsApp Number")
-        # Placed side by side right next to each other using columns
+        # WhatsApp-style side-by-side layout
         col_cc, col_num = st.columns([1, 4])
         with col_cc:
-            country_code = st.text_input("Country Code", value="91")
+            country_code = st.text_input("Code", value="91")
         with col_num:
             cust_phone_10 = st.text_input("10-Digit WhatsApp Number", max_chars=10, placeholder="e.g. 6380965289")
 
@@ -644,6 +673,9 @@ else:
             st.markdown("---")
             st.markdown("### Transaction Log & Details")
             
+            # Interactive data table showing transaction logs right inside the app
+            st.dataframe(filtered_sales, use_container_width=True)
+
             csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Export Selected Sales Data (CSV)",
