@@ -1,17 +1,57 @@
 import datetime
 from datetime import timedelta
+import gspread
+from google.oauth2.service_account import Credentials
 import pandas as pd
 import streamlit as st
 
 st.title("TVS Agency Service Reminder Portal")
 
-DATA_FILE = "service_customers.csv"
+
+@st.cache_resource
+def get_service_worksheet():
+  scope = [
+      "https://www.googleapis.com/auth/spreadsheets",
+      "https://www.googleapis.com/auth/drive",
+  ]
+  credentials_dict = dict(st.secrets["gcp_service_account"])
+  creds = Credentials.from_service_account_info(
+      credentials_dict, scopes=scope
+  )
+  client = gspread.authorize(creds)
+
+  # Open your exact Google Sheet using its unique ID from the link
+  spreadsheet = client.open_by_key(
+      "1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM"
+  )
+
+  # Try to select the 'Service_Reminders' tab, or create it if it doesn't exist
+  try:
+    worksheet = spreadsheet.worksheet("Service_Reminders")
+  except gspread.exceptions.WorksheetNotFound:
+    worksheet = spreadsheet.add_worksheet(
+        title="Service_Reminders", rows="1000", cols="8"
+    )
+    worksheet.append_row([
+        "Name",
+        "Phone",
+        "Bike",
+        "Free_Services_Count",
+        "Purchase_Date",
+        "Current_Service_Stage",
+        "Next_Due_Date",
+        "Status",
+    ])
+
+  return worksheet
+
+
+sheet = get_service_worksheet()
 
 
 def load_data():
-  try:
-    return pd.read_csv(DATA_FILE)
-  except FileNotFoundError:
+  data = sheet.get_all_records()
+  if not data:
     return pd.DataFrame(columns=[
         "Name",
         "Phone",
@@ -22,6 +62,7 @@ def load_data():
         "Next_Due_Date",
         "Status",
     ])
+  return pd.DataFrame(data)
 
 
 df = load_data()
@@ -48,34 +89,31 @@ if menu == "Add New Customer":
     submitted = st.form_submit_button("Save Customer & Schedule")
     if submitted:
       if name and phone:
-        # Initial schedule offset for 1st service
-        if free_services_count == 4:
-          next_due = purchase_date + timedelta(days=60)  # 2 months
-        else:
-          next_due = purchase_date + timedelta(days=60)  # 1-2 months (~60 days)
+        next_due = purchase_date + timedelta(days=60)
         stage = "1st Service (Free)"
 
-        new_row = pd.DataFrame({
-            "Name": [name],
-            "Phone": [phone],
-            "Bike": [bike],
-            "Free_Services_Count": [free_services_count],
-            "Purchase_Date": [str(purchase_date)],
-            "Current_Service_Stage": [stage],
-            "Next_Due_Date": [str(next_due)],
-            "Status": ["Pending"],
-        })
+        new_row = [
+            name,
+            str(phone),
+            bike,
+            int(free_services_count),
+            str(purchase_date),
+            stage,
+            str(next_due),
+            "Pending",
+        ]
 
-        df = pd.concat([df, new_row], ignore_index=True)
-        df.to_csv(DATA_FILE, index=False)
+        sheet.append_row(new_row)
         st.success(
-            f"Customer {name} saved! Scheduled for {stage} on {next_due.strftime('%d-%m-%Y')}."
+            f"Customer {name} saved to Google Sheet tab 'Service_Reminders'!"
+            f" Scheduled for {stage} on {next_due.strftime('%d-%m-%Y')}."
         )
       else:
         st.error("Please fill in at least the customer name and phone number.")
 
 elif menu == "View Due Reminders":
   st.subheader("Service Calls Due Today & Overdue")
+  df = load_data()
   if not df.empty:
     today = str(datetime.date.today())
     due_filter = (df["Next_Due_Date"] <= today) & (df["Status"] == "Pending")
@@ -96,58 +134,45 @@ elif menu == "View Due Reminders":
             if st.button(
                 f"Mark as Called & Advance Schedule", key=f"call_{index}"
             ):
+              sheet_row_idx = index + 2  # Header is row 1
               current_stage = row["Current_Service_Stage"]
               free_limit = int(row["Free_Services_Count"])
               base_date = datetime.date.today()
 
               next_stage = current_stage
-              next_due_calc = base_date + timedelta(days=180)  # default fallback
+              next_due_calc = base_date + timedelta(days=180)
 
               if free_limit == 4:
                 if "1st" in current_stage:
                   next_stage = "2nd Service (Free)"
-                  next_due_calc = base_date + timedelta(days=120)  # 4 months
+                  next_due_calc = base_date + timedelta(days=120)
                 elif "2nd" in current_stage:
                   next_stage = "3rd Service (Free)"
-                  next_due_calc = base_date + timedelta(days=240)  # 8 months
+                  next_due_calc = base_date + timedelta(days=240)
                 elif "3rd" in current_stage:
                   next_stage = "4th Service (Free)"
-                  next_due_calc = base_date + timedelta(days=365)  # 12 months
-                elif "4th" in current_stage:
-                  next_stage = "5th Service (Paid)"
-                  next_due_calc = base_date + timedelta(days=90)
+                  next_due_calc = base_date + timedelta(days=365)
                 else:
-                  next_stage = "Next Service (Paid)"
+                  next_stage = "Subsequent Service (Paid)"
                   next_due_calc = base_date + timedelta(days=90)
-              else:  # 3 Free Services schedule based on your screenshots
+              else:
                 if "1st" in current_stage:
                   next_stage = "2nd Service (Free)"
-                  next_due_calc = base_date + timedelta(
-                      days=180
-                  )  # 6 months (~180 days)
+                  next_due_calc = base_date + timedelta(days=180)
                 elif "2nd" in current_stage:
                   next_stage = "3rd Service (Free)"
-                  next_due_calc = base_date + timedelta(
-                      days=365
-                  )  # 12 months (1 year)
+                  next_due_calc = base_date + timedelta(days=365)
                 elif "3rd" in current_stage:
                   next_stage = "4th Service (Paid)"
-                  next_due_calc = base_date + timedelta(
-                      days=548
-                  )  # 18 months (~1.5 years)
-                elif "4th" in current_stage:
-                  next_stage = "Subsequent Service (Paid)"
-                  next_due_calc = base_date + timedelta(
-                      days=180
-                  )  # Every 6 months
+                  next_due_calc = base_date + timedelta(days=548)
                 else:
                   next_stage = "Subsequent Service (Paid)"
                   next_due_calc = base_date + timedelta(days=180)
 
-              df.at[index, "Current_Service_Stage"] = next_stage
-              df.at[index, "Next_Due_Date"] = str(next_due_calc)
-              df.at[index, "Status"] = "Pending"
-              df.to_csv(DATA_FILE, index=False)
+              sheet.update_cell(sheet_row_idx, 6, next_stage)
+              sheet.update_cell(sheet_row_idx, 7, str(next_due_calc))
+              sheet.update_cell(sheet_row_idx, 8, "Pending")
+
               st.success(
                   f"Call logged. Next schedule updated to {next_stage} on"
                   f" {next_due_calc}."
@@ -168,6 +193,7 @@ elif menu == "View Due Reminders":
 
 elif menu == "All Records":
   st.subheader("Complete Customer Service Database")
+  df = load_data()
   if not df.empty:
     st.dataframe(df, use_container_width=True)
   else:
