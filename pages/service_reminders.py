@@ -105,7 +105,7 @@ with st.sidebar.form("add_customer_form"):
     else:
       st.sidebar.error("Please enter Name and Phone.")
 
-# Main screen view toggle: Interactive button for reminders vs all records (Default: All Records)
+# Main screen view toggle: Interactive button for reminders vs all records
 if "view_mode" not in st.session_state:
   st.session_state["view_mode"] = "All Records"
 
@@ -129,7 +129,7 @@ if st.session_state["view_mode"] == "Reminders":
     )
     active_df = df[active_filter]
 
-  if not active_df.empty:
+    if not active_df.empty:
       st.write(f"You have **{len(active_df)}** active service reminders:")
 
       for index, row in active_df.iterrows():
@@ -173,53 +173,6 @@ if st.session_state["view_mode"] == "Reminders":
 
         with col_f3:
           if st.button("✅ Service Completed", key=f"complete_click_{index}"):
-            current_stage = str(row["Current_Service_Stage"])
-            free_limit = int(row["Free_Services_Count"])
-            base_date = datetime.date.today()
-
-            next_stage = current_stage
-            next_due_calc = base_date + timedelta(days=180)
-
-            if free_limit == 4:
-              if "1st" in current_stage:
-                next_stage = "2nd Service (Free)"
-                next_due_calc = base_date + timedelta(days=120)
-              elif "2nd" in current_stage:
-                next_stage = "3rd Service (Free)"
-                next_due_calc = base_date + timedelta(days=240)
-              elif "3rd" in current_stage:
-                next_stage = "4th Service (Free)"
-                next_due_calc = base_date + timedelta(days=365)
-              else:
-                next_stage = "Subsequent Service (Paid)"
-                next_due_calc = base_date + timedelta(days=90)
-            else:
-              if "1st" in current_stage:
-                next_stage = "2nd Service (Free)"
-                next_due_calc = base_date + timedelta(days=180)
-              elif "2nd" in current_stage:
-                next_stage = "3rd Service (Free)"
-                next_due_calc = base_date + timedelta(days=365)
-              elif "3rd" in current_stage:
-                next_stage = "4th Service (Paid)"
-                next_due_calc = base_date + timedelta(days=548)
-              else:
-                next_stage = "Subsequent Service (Paid)"
-                next_due_calc = base_date + timedelta(days=180)
-
-            df.loc[index, "Current_Service_Stage"] = next_stage
-            df.loc[index, "Latest_Service_Date"] = str(base_date)
-            df.loc[index, "Next_Due_Date"] = str(next_due_calc)
-            df.loc[index, "Status"] = "Completed"
-
-            save_data_to_cloud(df)
-            st.success(
-                f"Service completed for {row['Name']}! Next milestone:"
-                f" {next_due_calc}."
-            )
-            st.rerun()
-
-          if mark_complete_pressed:
             current_stage = str(row["Current_Service_Stage"])
             free_limit = int(row["Free_Services_Count"])
             base_date = datetime.date.today()
