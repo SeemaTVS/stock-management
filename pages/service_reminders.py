@@ -81,12 +81,15 @@ with st.sidebar.form("add_customer_form"):
   free_services_count = st.selectbox(
       "Free Services Scheme", [3, 4], format_func=lambda x: f"{x} Free Services"
   )
+  upcoming_stage = st.selectbox(
+      "Upcoming Service Stage",
+      ["1 Free", "2 Free", "3 Free", "4 Free", "Paid"],
+  )
 
   submitted = st.form_submit_button("Save Customer")
   if submitted:
     if name and phone:
       next_due = purchase_date + timedelta(days=60)
-      stage = "1st Service (Free)"
 
       new_row = pd.DataFrame([{
           "Name": name.strip(),
@@ -94,7 +97,7 @@ with st.sidebar.form("add_customer_form"):
           "Bike": bike.strip(),
           "Free_Services_Count": int(free_services_count),
           "Latest_Service_Date": str(purchase_date),
-          "Current_Service_Stage": stage,
+          "Current_Service_Stage": upcoming_stage,
           "Next_Due_Date": str(next_due),
           "Status": "Pending",
       }])
@@ -150,8 +153,8 @@ if st.session_state["view_mode"] == "Reminders":
             <div style="border: 2px solid {border_color}; padding: 10px; border-radius: 6px; margin-bottom: 5px; background-color: #fafafa;">
                 <h4 style="margin: 0; color: #333;">{cust_name} - {row['Bike']}</h4>
                 <p style="margin: 3px 0; font-size: 13px;"><b>Status:</b> {status_badge}</p>
-                <p style="margin: 3px 0; font-size: 13px;"><b>Milestone:</b> {row['Current_Service_Stage']} | <b>Due:</b> {row['Next_Due_Date']}</p>
-                <p style="margin: 3px 0; font-size: 13px;"><b>Phone:</b> {cust_phone} | <b>Last Date:</b> {row['Latest_Service_Date']}</p>
+                <p style="margin: 3px 0; font-size: 13px;"><b>Stage:</b> {row['Current_Service_Stage']} | <b>Due:</b> {row['Next_Due_Date']}</p>
+                <p style="margin: 3px 0; font-size: 13px;"><b>Phone:</b> {cust_phone}</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -189,30 +192,30 @@ if st.session_state["view_mode"] == "Reminders":
               next_due_calc = base_date + timedelta(days=180)
 
               if free_limit == 4:
-                if "1st" in current_stage:
-                  next_stage = "2nd Service (Free)"
+                if "1" in current_stage:
+                  next_stage = "2 Free"
                   next_due_calc = base_date + timedelta(days=120)
-                elif "2nd" in current_stage:
-                  next_stage = "3rd Service (Free)"
+                elif "2" in current_stage:
+                  next_stage = "3 Free"
                   next_due_calc = base_date + timedelta(days=240)
-                elif "3rd" in current_stage:
-                  next_stage = "4th Service (Free)"
+                elif "3" in current_stage:
+                  next_stage = "4 Free"
                   next_due_calc = base_date + timedelta(days=365)
                 else:
-                  next_stage = "Subsequent Service (Paid)"
+                  next_stage = "Paid"
                   next_due_calc = base_date + timedelta(days=90)
               else:
-                if "1st" in current_stage:
-                  next_stage = "2nd Service (Free)"
+                if "1" in current_stage:
+                  next_stage = "2 Free"
                   next_due_calc = base_date + timedelta(days=180)
-                elif "2nd" in current_stage:
-                  next_stage = "3rd Service (Free)"
+                elif "2" in current_stage:
+                  next_stage = "3 Free"
                   next_due_calc = base_date + timedelta(days=365)
-                elif "3rd" in current_stage:
-                  next_stage = "4th Service (Paid)"
+                elif "3" in current_stage:
+                  next_stage = "Paid"
                   next_due_calc = base_date + timedelta(days=548)
                 else:
-                  next_stage = "Subsequent Service (Paid)"
+                  next_stage = "Paid"
                   next_due_calc = base_date + timedelta(days=180)
 
               df.loc[match_i, "Current_Service_Stage"] = next_stage
@@ -234,6 +237,8 @@ if st.session_state["view_mode"] == "Reminders":
 else:
   st.subheader("Complete Customer Service Database")
   if not df.empty:
-    st.dataframe(df, use_container_width=True)
+    # Hide columns that aren't needed on mobile view to save space
+    display_df = df.drop(columns=["Free_Services_Count", "Latest_Service_Date"], errors="ignore")
+    st.dataframe(display_df, use_container_width=True)
   else:
     st.info("No records found.")
