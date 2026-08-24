@@ -68,51 +68,58 @@ def save_data_to_cloud(df_to_save):
 
 df = load_data()
 
-# Sidebar for management (Adding / Editing)
+# Sidebar: Customer Management (Adding new customers without clearing main screen)
 st.sidebar.header("Customer Management")
-action_choice = st.sidebar.radio("Actions", ["View Reminders", "Add Customer", "All Records"])
+with st.sidebar.form("add_customer_form"):
+  st.subheader("Register New Vehicle")
+  name = st.text_input("Customer Name")
+  phone = st.text_input("Phone Number")
+  bike = st.text_input("Bike Model")
+  purchase_date = st.date_input("Purchase Date", datetime.date.today())
+  free_services_count = st.selectbox(
+      "Free Services Scheme", [3, 4], format_func=lambda x: f"{x} Free Services"
+  )
+  
+  submitted = st.form_submit_button("Save Customer")
+  if submitted:
+    if name and phone:
+      next_due = purchase_date + timedelta(days=60)
+      stage = "1st Service (Free)"
+      
+      new_row = pd.DataFrame([{
+          "Name": name.strip(),
+          "Phone": str(phone).strip(),
+          "Bike": bike.strip(),
+          "Free_Services_Count": int(free_services_count),
+          "Latest_Service_Date": str(purchase_date),
+          "Current_Service_Stage": stage,
+          "Next_Due_Date": str(next_due),
+          "Status": "Pending"
+      }])
+      
+      updated_df = pd.concat([df, new_row], ignore_index=True)
+      save_data_to_cloud(updated_df)
+      st.sidebar.success(f"Customer {name} added successfully!")
+      st.rerun()
+    else:
+      st.sidebar.error("Please enter Name and Phone.")
 
-if action_choice == "Add Customer":
-  st.sidebar.subheader("Register New Vehicle")
-  with st.sidebar.form("add_customer_form"):
-    name = st.text_input("Customer Name")
-    phone = st.text_input("Phone Number")
-    bike = st.text_input("Bike Model")
-    purchase_date = st.date_input("Purchase Date", datetime.date.today())
-    free_services_count = st.selectbox("Free Services Scheme", [3, 4], format_func=lambda x: f"{x} Free Services")
-    
-    submitted = st.form_submit_button("Save Customer")
-    if submitted:
-      if name and phone:
-        next_due = purchase_date + timedelta(days=60)
-        stage = "1st Service (Free)"
-        
-        new_row = pd.DataFrame([{
-            "Name": name.strip(),
-            "Phone": str(phone).strip(),
-            "Bike": bike.strip(),
-            "Free_Services_Count": int(free_services_count),
-            "Latest_Service_Date": str(purchase_date),
-            "Current_Service_Stage": stage,
-            "Next_Due_Date": str(next_due),
-            "Status": "Pending"
-        }])
-        
-        updated_df = pd.concat([df, new_row], ignore_index=True)
-        save_data_to_cloud(updated_df)
-        st.success(f"Customer {name} added successfully!")
-        st.rerun()
-      else:
-        st.error("Please enter Name and Phone.")
+# Main screen view toggle: Interactive button for reminders vs all records (Default: All Records)
+if "view_mode" not in st.session_state:
+  st.session_state["view_mode"] = "All Records"
 
-elif action_choice == "All Records":
-  st.subheader("Complete Customer Service Database")
-  if not df.empty:
-    st.dataframe(df, use_container_width=True)
-  else:
-    st.info("No records found.")
+col_btn1, col_btn2 = st.columns(2)
+with col_btn1:
+  if st.button("🔔 View Due Reminders", use_container_width=True):
+    st.session_state["view_mode"] = "Reminders"
+with col_btn2:
+  if st.button("📋 All Records", use_container_width=True):
+    st.session_state["view_mode"] = "All Records"
 
-else:
+st.markdown("---")
+
+# Render based on selected main view mode
+if st.session_state["view_mode"] == "Reminders":
   st.subheader("Service Calls Due & Overdue")
   if not df.empty and "Next_Due_Date" in df.columns:
     today = str(datetime.date.today())
@@ -121,23 +128,22 @@ else:
 
     if not due_df.empty:
       st.write(f"You have **{len(due_df)}** customer calls pending action:")
-      for index, row in due_df.iterrows():
+      for index, row in df[due_filter].iterrows():
         with st.expander(f"{row['Name']} - {row['Bike']} | Due: {row['Next_Due_Date']}"):
           st.write(f"**Phone:** {row['Phone']}")
           st.write(f"**Upcoming Milestone:** {row['Current_Service_Stage']}")
           st.write(f"**Latest Date on Record:** {row['Latest_Service_Date']}")
 
-          col1, col2, col3 = st.columns(3)
+          c1, c2, c3 = st.columns(3)
           
-          with col1:
-            # Direct phone dialer link
+          with c1:
             st.markdown(f'<a href="tel:{row["Phone"]}" target="_self"><button style="width:100%;background-color:#4CAF50;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">📞 Call Now</button></a>', unsafe_allow_html=True)
 
-          with col2:
+          with c2:
             whatsapp_link = f"https://wa.me/91{row['Phone']}?text=Hello%20{row['Name']},%20this%20is%20from%20SEEMA%20TVS.%20Your%20{row['Bike']}%20is%20due%20for%20{row['Current_Service_Stage']}."
             st.markdown(f'<a href="{whatsapp_link}" target="_blank"><button style="width:100%;background-color:#25D366;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">💬 WhatsApp</button></a>', unsafe_allow_html=True)
 
-          with col3:
+          with c3:
             if st.button("Mark Completed", key=f"complete_{index}"):
               current_stage = str(row["Current_Service_Stage"])
               free_limit = int(row["Free_Services_Count"])
@@ -185,3 +191,10 @@ else:
       st.info("No service calls due right now.")
   else:
     st.info("No customer records found.")
+
+else:
+  st.subheader("Complete Customer Service Database")
+  if not df.empty:
+    st.dataframe(df, use_container_width=True)
+  else:
+    st.info("No records found.")
