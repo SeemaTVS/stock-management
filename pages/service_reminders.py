@@ -43,6 +43,8 @@ def load_data():
     for col in EXPECTED_COLS:
       if col not in df_loaded.columns:
         df_loaded[col] = ""
+    # Ensure Status column defaults to 'Pending' if empty
+    df_loaded["Status"] = df_loaded["Status"].fillna("Pending")
     return df_loaded
   except Exception as e:
     st.warning(
@@ -68,7 +70,7 @@ def save_data_to_cloud(df_to_save):
 
 df = load_data()
 
-# Sidebar: Customer Management (Adding new customers without clearing main screen)
+# Sidebar: Customer Management (Adding new customers)
 st.sidebar.header("Customer Management")
 with st.sidebar.form("add_customer_form"):
   st.subheader("Register New Vehicle")
@@ -79,13 +81,13 @@ with st.sidebar.form("add_customer_form"):
   free_services_count = st.selectbox(
       "Free Services Scheme", [3, 4], format_func=lambda x: f"{x} Free Services"
   )
-  
+
   submitted = st.form_submit_button("Save Customer")
   if submitted:
     if name and phone:
       next_due = purchase_date + timedelta(days=60)
       stage = "1st Service (Free)"
-      
+
       new_row = pd.DataFrame([{
           "Name": name.strip(),
           "Phone": str(phone).strip(),
@@ -94,9 +96,9 @@ with st.sidebar.form("add_customer_form"):
           "Latest_Service_Date": str(purchase_date),
           "Current_Service_Stage": stage,
           "Next_Due_Date": str(next_due),
-          "Status": "Pending"
+          "Status": "Pending",
       }])
-      
+
       updated_df = pd.concat([df, new_row], ignore_index=True)
       save_data_to_cloud(updated_df)
       st.sidebar.success(f"Customer {name} added successfully!")
@@ -120,31 +122,79 @@ st.markdown("---")
 
 # Render based on selected main view mode
 if st.session_state["view_mode"] == "Reminders":
-  st.subheader("Service Calls Due & Overdue")
+  st.subheader("Service Pipeline & Reminders")
   if not df.empty and "Next_Due_Date" in df.columns:
     today = str(datetime.date.today())
-    due_filter = (df["Next_Due_Date"] <= today) & (df["Status"] == "Pending")
-    due_df = df[due_filter]
+    # Filter for items that are due/overdue or actively in progress (Pending or Called)
+    active_filter = (df["Next_Due_Date"] <= today) & (
+        df["Status"].isin(["Pending", "Called"])
+    )
+    active_df = df[active_filter]
 
-    if not due_df.empty:
-      st.write(f"You have **{len(due_df)}** customer calls pending action:")
-      for index, row in df[due_filter].iterrows():
-        with st.expander(f"{row['Name']} - {row['Bike']} | Due: {row['Next_Due_Date']}"):
-          st.write(f"**Phone:** {row['Phone']}")
-          st.write(f"**Upcoming Milestone:** {row['Current_Service_Stage']}")
-          st.write(f"**Latest Date on Record:** {row['Latest_Service_Date']}")
+    if not active_df.empty:
+      st.write(f"You have **{len(active_df)}** active service reminders:")
 
-          c1, c2, c3 = st.columns(3)
-          
-          with c1:
-            st.markdown(f'<a href="tel:{row["Phone"]}" target="_self"><button style="width:100%;background-color:#4CAF50;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">📞 Call Now</button></a>', unsafe_allow_html=True)
+      for index, row in active_df.iterrows():
+        current_status = row.get("Status", "Pending")
 
-          with c2:
-            whatsapp_link = f"https://wa.me/91{row['Phone']}?text=Hello%20{row['Name']},%20this%20is%20from%20SEEMA%20TVS.%20Your%20{row['Bike']}%20is%20due%20for%20{row['Current_Service_Stage']}."
-            st.markdown(f'<a href="{whatsapp_link}" target="_blank"><button style="width:100%;background-color:#25D366;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">💬 WhatsApp</button></a>', unsafe_allow_html=True)
+        # Color coding logic based on status
+        # Red = Pending (Due & not called yet)
+        # Orange = Called (Called, waiting for service execution)
+        if current_status == "Called":
+          border_color = "#FF9800"  # Orange
+          status_badge = "🟠 Called - Service Pending"
+        else:
+          border_color = "#F44336"  # Red
+          status_badge = "🔴 Due - Not Called Yet"
 
-          with c3:
-            if st.button("Mark Completed", key=f"complete_{index}"):
+        # Wrap each card in a colored container border
+        with st.container():
+          st.markdown(
+              f"""
+                    <div style="border: 2px solid {border_color}; padding: 15px; border-radius: 8px; margin-bottom: 15px; background-color: #fafafa;">
+                        <h4 style="margin: 0; color: #333;">{row['Name']} - {row['Bike']}</h4>
+                        <p style="margin: 5px 0; font-size: 14px;"><b>Status:</b> {status_badge}</p>
+                        <p style="margin: 5px 0; font-size: 14px;"><b>Milestone Due:</b> {row['Current_Service_Stage']} | <b>Due Date:</b> {row['Next_Due_Date']}</p>
+                        <p style="margin: 5px 0; font-size: 14px;"><b>Phone:</b> {row['Phone']} | <b>Last Date:</b> {row['Latest_Service_Date']}</p>
+                    </div>
+                    """,
+              unsafe_allow_html=True,
+          )
+
+          col_c1, col_c2, col_c3 = st.columns(3)
+
+          with col_c1:
+            st.markdown(
+                f'<a href="tel:{row["Phone"]}" target="_self"><button'
+                ' style="width:100%;background-color:#4CAF50;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">📞'
+                " Call Now</button></a>",
+                unsafe_allow_html=True,
+            )
+
+          with col_c2:
+            if current_status == "Pending":
+              if st.button("Mark as Called", key=f"call_btn_{index}"):
+                df.loc[index, "Status"] = "Called"
+                save_data_to_cloud(df)
+                st.success("Marked as called!")
+                st.rerun()
+            else:
+              whatsapp_link = (
+                  f"https://wa.me/91{row['Phone']}?text=Hello%20{row['Name']},%20this"
+                  f"%20is%20from%20SEEMA%20TVS.%20Your%20{row['Bike']}%20is"
+                  f"%20due%20for%20{row['Current_Service_Stage']}."
+              )
+              st.markdown(
+                  f'<a href="{whatsapp_link}" target="_blank"><button'
+                  ' style="width:100%;background-color:#25D366;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">💬'
+                  " WhatsApp</button></a>",
+                  unsafe_allow_html=True,
+              )
+
+          with col_c3:
+            if st.button(
+                "✅ Mark Service Completed", key=f"complete_btn_{index}"
+            ):
               current_stage = str(row["Current_Service_Stage"])
               free_limit = int(row["Free_Services_Count"])
               base_date = datetime.date.today()
@@ -182,13 +232,18 @@ if st.session_state["view_mode"] == "Reminders":
               df.loc[index, "Current_Service_Stage"] = next_stage
               df.loc[index, "Latest_Service_Date"] = str(base_date)
               df.loc[index, "Next_Due_Date"] = str(next_due_calc)
-              df.loc[index, "Status"] = "Pending"
+              df.loc[index, "Status"] = (
+                  "Completed"  # Moves into green/completed history
+              )
 
               save_data_to_cloud(df)
-              st.success(f"Updated! Next service scheduled for {next_due_calc}.")
+              st.success(
+                  f"Service completed! Next milestone scheduled for"
+                  f" {next_due_calc}."
+              )
               st.rerun()
     else:
-      st.info("No service calls due right now.")
+      st.info("No active service calls due right now.")
   else:
     st.info("No customer records found.")
 
