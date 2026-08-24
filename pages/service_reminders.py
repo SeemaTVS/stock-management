@@ -1,60 +1,70 @@
 import datetime
 from datetime import timedelta
-import gspread
-from google.oauth2.service_account import Credentials
 import pandas as pd
+import requests
 import streamlit as st
 
 st.title("TVS Agency Service Reminder Portal")
 
-
-@st.cache_resource
-def get_worksheet():
-  scope = [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive",
-  ]
-  # Uses Streamlit secrets for Google Cloud credentials
-  creds_dict = dict(st.secrets["connections"]["gsheets"])
-  creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
-  client = gspread.authorize(creds)
-  sheet = client.open_by_key(
-      "1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM"
-  )
-  try:
-    return sheet.worksheet("Service_Reminders")
-  except gspread.exceptions.WorksheetNotFound:
-    ws = sheet.add_worksheet(title="Service_Reminders", rows="1000", cols="8")
-    ws.append_row([
-        "Name",
-        "Phone",
-        "Bike",
-        "Free_Services_Count",
-        "Purchase_Date",
-        "Current_Service_Stage",
-        "Next_Due_Date",
-        "Status",
-    ])
-    return ws
+# Using the same Google Sheet URL from your main app
+GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM/edit?gid=0#gid=0"
+WEB_APP_URL = "https://script.google.com/macros/s/AKfycbymkbPavkWPw_5kFEN7S6KQTg2MvS_zqAmGXXkqBAjVDo7XrnUCj9GKKKrA_heBvWZvmQ/exec"
 
 
-worksheet = get_worksheet()
+def get_csv_export_url(sheet_url, sheet_name="Service_Reminders"):
+  import re
+
+  match = re.search(r"/d/([a-zA-Z0-9-_]+)", sheet_url)
+  if match:
+    # Appends gid or sheet name parameter for specific worksheets if needed
+    return (
+        f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq?"
+        f"tqx=out:csv&sheet={sheet_name}"
+    )
+  return sheet_url
 
 
+EXPECTED_COLS = [
+    "Name",
+    "Phone",
+    "Bike",
+    "Free_Services_Count",
+    "Purchase_Date",
+    "Current_Service_Stage",
+    "Next_Due_Date",
+    "Status",
+]
+
+
+@st.cache_data(ttl=10)
 def load_data():
-  data = worksheet.get_all_records()
-  if not data:
-    return pd.DataFrame(columns=[
-        "Name",
-        "Phone",
-        "Bike",
-        "Free_Services_Count",
-        "Purchase_Date",
-        "Current_Service_Stage",
-        "Next_Due_Date",
-        "Status",
-    ])
-  return pd.DataFrame(data)
+  try:
+    csv_url = get_csv_export_url(GOOGLE_SHEET_URL, "Service_Reminders")
+    df_loaded = pd.read_csv(csv_url)
+    for col in EXPECTED_COLS:
+      if col not in df_loaded.columns:
+        df_loaded[col] = ""
+    return df_loaded
+  except Exception as e:
+    st.warning(
+        "Could not load Service_Reminders tab from Google Sheet yet. Make"
+        f" sure the worksheet exists. Details: {e}"
+    )
+    return pd.DataFrame(columns=EXPECTED_COLS)
+
+
+def save_data_to_cloud(df_to_save):
+  try:
+    if WEB_APP_URL:
+      records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
+      payload = {"type": "service_reminders", "data": records}
+      response = requests.post(WEB_APP_URL, json=payload, timeout=10)
+      if response.status_code == 200:
+        st.success("Changes synced to cloud successfully!")
+      else:
+        st.error(f"Sync failed with status code: {response.status_code}")
+  except Exception as e:
+    st.error(f"Error syncing to cloud: {e}")
 
 
 df = load_data()
@@ -84,22 +94,24 @@ if menu == "Add New Customer":
         next_due = purchase_date + timedelta(days=60)
         stage = "1st Service (Free)"
 
-        row_data = [
-            name,
-            str(phone),
-            bike,
-            int(free_services_count),
-            str(purchase_date),
-            stage,
-            str(next_due),
-            "Pending",
-        ]
+        new_row = pd.DataFrame([{
+            "Name": name.strip(),
+            "Phone": str(phone).strip(),
+            "Bike": bike.strip(),
+            "Free_Services_Count": int(free_services_count),
+            "Purchase_Date": str(purchase_date),
+            "Current_Service_Stage": stage,
+            "Next_Due_Date": str(next_due),
+            "Status": "Pending",
+        }])
 
-        worksheet.append_row(row_data)
+        updated_df = pd.concat([df, new_row], ignore_index=True)
+        save_data_to_cloud(updated_df)
         st.success(
-            f"Customer {name} saved to Google Sheets! Scheduled for {stage} on"
+            f"Customer {name} saved! Scheduled for {stage} on"
             f" {next_due.strftime('%d-%m-%Y')}."
         )
+        st.rerun()
       else:
         st.error("Please fill in at least the customer name and phone number.")
 
@@ -124,12 +136,9 @@ elif menu == "View Due Reminders":
           col1, col2 = st.columns(2)
           with col1:
             if st.button(
-                f"Mark as Called & Advance Schedule", key=f"call_{index}"
+                "Mark as Called & Advance Schedule", key=f"call_{index}"
             ):
-              sheet_row_idx = (
-                  index + 2
-              )  # Account for 1-based indexing + header row
-              current_stage = row["Current_Service_Stage"]
+              current_stage = str(row["Current_Service_Stage"])
               free_limit = int(row["Free_Services_Count"])
               base_date = datetime.date.today()
 
@@ -163,10 +172,11 @@ elif menu == "View Due Reminders":
                   next_stage = "Subsequent Service (Paid)"
                   next_due_calc = base_date + timedelta(days=180)
 
-              worksheet.update_cell(sheet_row_idx, 6, next_stage)
-              worksheet.update_cell(sheet_row_idx, 7, str(next_due_calc))
-              worksheet.update_cell(sheet_row_idx, 8, "Pending")
+              df.loc[index, "Current_Service_Stage"] = next_stage
+              df.loc[index, "Next_Due_Date"] = str(next_due_calc)
+              df.loc[index, "Status"] = "Pending"
 
+              save_data_to_cloud(df)
               st.success(
                   f"Call logged. Next schedule updated to {next_stage} on"
                   f" {next_due_calc}."
@@ -176,7 +186,7 @@ elif menu == "View Due Reminders":
           with col2:
             whatsapp_link = (
                 f"https://wa.me/91{row['Phone']}?text=Hello%20{row['Name']},%20this"
-                f"%20is%20from%20TVS%20agency.%20Your%20{row['Bike']}%20is"
+                f"%20is%20from%20SEEMA%20TVS.%20Your%20{row['Bike']}%20is"
                 f"%20due%20for%20{row['Current_Service_Stage']}."
             )
             st.markdown(f"[Open WhatsApp Chat]({whatsapp_link})")
