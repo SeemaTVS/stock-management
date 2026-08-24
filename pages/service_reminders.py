@@ -6,7 +6,7 @@ import streamlit as st
 
 st.title("TVS Agency Service Reminder Portal")
 
-# Using the same Google Sheet URL from your main app
+# Google Sheet and Web App endpoints
 GOOGLE_SHEET_URL = "https://docs.google.com/spreadsheets/d/1Y4yyok1dtw0RZyhc46vwHZ4frW9SyTsHCXMBSpegWlM/edit?gid=0#gid=0"
 WEB_APP_URL = "https://script.google.com/macros/s/AKfycbymkbPavkWPw_5kFEN7S6KQTg2MvS_zqAmGXXkqBAjVDo7XrnUCj9GKKKrA_heBvWZvmQ/exec"
 
@@ -16,7 +16,6 @@ def get_csv_export_url(sheet_url, sheet_name="Service_Reminders"):
 
   match = re.search(r"/d/([a-zA-Z0-9-_]+)", sheet_url)
   if match:
-    # Appends gid or sheet name parameter for specific worksheets if needed
     return (
         f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq?"
         f"tqx=out:csv&sheet={sheet_name}"
@@ -29,7 +28,7 @@ EXPECTED_COLS = [
     "Phone",
     "Bike",
     "Free_Services_Count",
-    "Purchase_Date",
+    "Latest_Service_Date",
     "Current_Service_Stage",
     "Next_Due_Date",
     "Status",
@@ -47,8 +46,8 @@ def load_data():
     return df_loaded
   except Exception as e:
     st.warning(
-        "Could not load Service_Reminders tab from Google Sheet yet. Make"
-        f" sure the worksheet exists. Details: {e}"
+        "Could not load Service_Reminders tab from Google Sheet yet. Details:"
+        f" {e}"
     )
     return pd.DataFrame(columns=EXPECTED_COLS)
 
@@ -69,75 +68,77 @@ def save_data_to_cloud(df_to_save):
 
 df = load_data()
 
-menu = st.selectbox(
-    "Choose Action", ["View Due Reminders", "Add New Customer", "All Records"]
-)
+# Sidebar for management (Adding / Editing)
+st.sidebar.header("Customer Management")
+action_choice = st.sidebar.radio("Actions", ["View Reminders", "Add Customer", "All Records"])
 
-if menu == "Add New Customer":
-  st.subheader("Add Customer for Automated Service Scheduling")
-  with st.form("reminder_form"):
+if action_choice == "Add Customer":
+  st.sidebar.subheader("Register New Vehicle")
+  with st.sidebar.form("add_customer_form"):
     name = st.text_input("Customer Name")
     phone = st.text_input("Phone Number")
     bike = st.text_input("Bike Model")
-    purchase_date = st.date_input(
-        "Purchase Date / Last Service Date", datetime.date.today()
-    )
-    free_services_count = st.selectbox(
-        "Number of Free Services for this Vehicle",
-        [3, 4],
-        format_func=lambda x: f"{x} Free Services",
-    )
-
-    submitted = st.form_submit_button("Save Customer & Schedule")
+    purchase_date = st.date_input("Purchase Date", datetime.date.today())
+    free_services_count = st.selectbox("Free Services Scheme", [3, 4], format_func=lambda x: f"{x} Free Services")
+    
+    submitted = st.form_submit_button("Save Customer")
     if submitted:
       if name and phone:
         next_due = purchase_date + timedelta(days=60)
         stage = "1st Service (Free)"
-
+        
         new_row = pd.DataFrame([{
             "Name": name.strip(),
             "Phone": str(phone).strip(),
             "Bike": bike.strip(),
             "Free_Services_Count": int(free_services_count),
-            "Purchase_Date": str(purchase_date),
+            "Latest_Service_Date": str(purchase_date),
             "Current_Service_Stage": stage,
             "Next_Due_Date": str(next_due),
-            "Status": "Pending",
+            "Status": "Pending"
         }])
-
+        
         updated_df = pd.concat([df, new_row], ignore_index=True)
         save_data_to_cloud(updated_df)
-        st.success(
-            f"Customer {name} saved! Scheduled for {stage} on"
-            f" {next_due.strftime('%d-%m-%Y')}."
-        )
+        st.success(f"Customer {name} added successfully!")
         st.rerun()
       else:
-        st.error("Please fill in at least the customer name and phone number.")
+        st.error("Please enter Name and Phone.")
 
-elif menu == "View Due Reminders":
-  st.subheader("Service Calls Due Today & Overdue")
-  df = load_data()
+elif action_choice == "All Records":
+  st.subheader("Complete Customer Service Database")
+  if not df.empty:
+    st.dataframe(df, use_container_width=True)
+  else:
+    st.info("No records found.")
+
+else:
+  st.subheader("Service Calls Due & Overdue")
   if not df.empty and "Next_Due_Date" in df.columns:
     today = str(datetime.date.today())
     due_filter = (df["Next_Due_Date"] <= today) & (df["Status"] == "Pending")
     due_df = df[due_filter]
 
     if not due_df.empty:
-      st.write(f"You have {len(due_df)} customer calls pending:")
+      st.write(f"You have **{len(due_df)}** customer calls pending action:")
       for index, row in due_df.iterrows():
-        with st.expander(
-            f"{row['Name']} - {row['Bike']} ({row['Current_Service_Stage']} - Due:"
-            f" {row['Next_Due_Date']})"
-        ):
-          st.write(f"**Phone Number:** {row['Phone']}")
-          st.write(f"**Free Services Scheme:** {row['Free_Services_Count']} Services")
+        with st.expander(f"{row['Name']} - {row['Bike']} | Due: {row['Next_Due_Date']}"):
+          st.write(f"**Phone:** {row['Phone']}")
+          st.write(f"**Upcoming Milestone:** {row['Current_Service_Stage']}")
+          st.write(f"**Latest Date on Record:** {row['Latest_Service_Date']}")
 
-          col1, col2 = st.columns(2)
+          col1, col2, col3 = st.columns(3)
+          
           with col1:
-            if st.button(
-                "Mark as Called & Advance Schedule", key=f"call_{index}"
-            ):
+            # Direct phone dialer link
+            st.markdown(f'<a href="tel:{row["Phone"]}" target="_self"><button style="width:100%;background-color:#4CAF50;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">📞 Call Now</button></a>', unsafe_allow_html=True)
+
+          with col2:
+            whatsapp_link = f"https://wa.me/91{row['Phone']}?text=Hello%20{row['Name']},%20this%20is%20from%20SEEMA%20TVS.%20Your%20{row['Bike']}%20is%20due%20for%20{row['Current_Service_Stage']}."
+            st.markdown(f'<a href="{whatsapp_link}" target="_blank"><button style="width:100%;background-color:#25D366;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">💬 WhatsApp</button></a>', unsafe_allow_html=True)
+
+          with col3:
+            if st.button("Mark Completed", key=f"complete_{index}"):
               current_stage = str(row["Current_Service_Stage"])
               free_limit = int(row["Free_Services_Count"])
               base_date = datetime.date.today()
@@ -173,32 +174,14 @@ elif menu == "View Due Reminders":
                   next_due_calc = base_date + timedelta(days=180)
 
               df.loc[index, "Current_Service_Stage"] = next_stage
+              df.loc[index, "Latest_Service_Date"] = str(base_date)
               df.loc[index, "Next_Due_Date"] = str(next_due_calc)
               df.loc[index, "Status"] = "Pending"
 
               save_data_to_cloud(df)
-              st.success(
-                  f"Call logged. Next schedule updated to {next_stage} on"
-                  f" {next_due_calc}."
-              )
+              st.success(f"Updated! Next service scheduled for {next_due_calc}.")
               st.rerun()
-
-          with col2:
-            whatsapp_link = (
-                f"https://wa.me/91{row['Phone']}?text=Hello%20{row['Name']},%20this"
-                f"%20is%20from%20SEEMA%20TVS.%20Your%20{row['Bike']}%20is"
-                f"%20due%20for%20{row['Current_Service_Stage']}."
-            )
-            st.markdown(f"[Open WhatsApp Chat]({whatsapp_link})")
     else:
       st.info("No service calls due right now.")
   else:
-    st.info("No customer records found yet.")
-
-elif menu == "All Records":
-  st.subheader("Complete Customer Service Database")
-  df = load_data()
-  if not df.empty:
-    st.dataframe(df, use_container_width=True)
-  else:
-    st.info("No records available.")
+    st.info("No customer records found.")
