@@ -60,7 +60,7 @@ def save_data_to_cloud(df_to_save):
       payload = {"type": "service_reminders", "data": records}
       response = requests.post(WEB_APP_URL, json=payload, timeout=10)
       if response.status_code == 200:
-        st.success("Changes synced to cloud successfully!")
+        st.success("Changes synced to Google Sheets!")
       else:
         st.error(f"Sync failed with status code: {response.status_code}")
   except Exception as e:
