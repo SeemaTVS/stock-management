@@ -6,4 +6,4 @@ openpyxl
 pytesseract
 reportlab
 Pillow
-streamlit-gsheets
+git+https://github.com/streamlit/gsheets-connection
