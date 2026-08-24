@@ -44,6 +44,7 @@ def load_data():
       if col not in df_loaded.columns:
         df_loaded[col] = ""
     df_loaded["Status"] = df_loaded["Status"].fillna("Pending")
+    df_loaded["Latest_Service_Date"] = df_loaded["Latest_Service_Date"].fillna("")
     return df_loaded
   except Exception as e:
     st.warning(
@@ -134,6 +135,8 @@ if st.session_state["view_mode"] == "Reminders":
 
       for index, row in active_df.iterrows():
         current_status = str(row.get("Status", "Pending"))
+        cust_phone = str(row["Phone"])
+        cust_name = str(row["Name"])
 
         if current_status == "Called":
           border_color = "#FF9800"  # Orange
@@ -145,10 +148,10 @@ if st.session_state["view_mode"] == "Reminders":
         st.markdown(
             f"""
             <div style="border: 2px solid {border_color}; padding: 10px; border-radius: 6px; margin-bottom: 5px; background-color: #fafafa;">
-                <h4 style="margin: 0; color: #333;">{row['Name']} - {row['Bike']}</h4>
+                <h4 style="margin: 0; color: #333;">{cust_name} - {row['Bike']}</h4>
                 <p style="margin: 3px 0; font-size: 13px;"><b>Status:</b> {status_badge}</p>
                 <p style="margin: 3px 0; font-size: 13px;"><b>Milestone:</b> {row['Current_Service_Stage']} | <b>Due:</b> {row['Next_Due_Date']}</p>
-                <p style="margin: 3px 0; font-size: 13px;"><b>Phone:</b> {row['Phone']} | <b>Last Date:</b> {row['Latest_Service_Date']}</p>
+                <p style="margin: 3px 0; font-size: 13px;"><b>Phone:</b> {cust_phone} | <b>Last Date:</b> {row['Latest_Service_Date']}</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -158,66 +161,71 @@ if st.session_state["view_mode"] == "Reminders":
 
         with col_f1:
           st.markdown(
-              f'<a href="tel:{row["Phone"]}" target="_self"><button'
+              f'<a href="tel:{cust_phone}" target="_self"><button'
               ' style="width:100%;background-color:#4CAF50;color:white;border:none;padding:8px;border-radius:4px;cursor:pointer;">📞'
               " Call Now</button></a>",
               unsafe_allow_html=True,
           )
 
         with col_f2:
-          if st.button("📢 Mark as Called", key=f"call_click_{index}"):
-            df.loc[index, "Status"] = "Called"
-            save_data_to_cloud(df)
-            st.success(f"Updated {row['Name']} to Called!")
-            st.rerun()
+          if st.button("📢 Mark as Called", key=f"call_{cust_phone}_{index}"):
+            match_idx = df[(df["Phone"].astype(str) == cust_phone) & (df["Name"] == cust_name)].index
+            if not match_idx.empty:
+              df.loc[match_idx, "Status"] = "Called"
+              save_data_to_cloud(df)
+              st.success(f"Updated {cust_name} to Called!")
+              st.rerun()
 
         with col_f3:
-          if st.button("✅ Service Completed", key=f"complete_click_{index}"):
-            current_stage = str(row["Current_Service_Stage"])
-            free_limit = int(row["Free_Services_Count"])
-            base_date = datetime.date.today()
+          if st.button("✅ Service Completed", key=f"complete_{cust_phone}_{index}"):
+            match_idx = df[(df["Phone"].astype(str) == cust_phone) & (df["Name"] == cust_name)].index
+            if not match_idx.empty:
+              match_i = match_idx[0]
+              current_stage = str(df.loc[match_i, "Current_Service_Stage"])
+              free_limit = int(df.loc[match_i, "Free_Services_Count"])
+              base_date = datetime.date.today()
 
-            next_stage = current_stage
-            next_due_calc = base_date + timedelta(days=180)
+              next_stage = current_stage
+              next_due_calc = base_date + timedelta(days=180)
 
-            if free_limit == 4:
-              if "1st" in current_stage:
-                next_stage = "2nd Service (Free)"
-                next_due_calc = base_date + timedelta(days=120)
-              elif "2nd" in current_stage:
-                next_stage = "3rd Service (Free)"
-                next_due_calc = base_date + timedelta(days=240)
-              elif "3rd" in current_stage:
-                next_stage = "4th Service (Free)"
-                next_due_calc = base_date + timedelta(days=365)
+              if free_limit == 4:
+                if "1st" in current_stage:
+                  next_stage = "2nd Service (Free)"
+                  next_due_calc = base_date + timedelta(days=120)
+                elif "2nd" in current_stage:
+                  next_stage = "3rd Service (Free)"
+                  next_due_calc = base_date + timedelta(days=240)
+                elif "3rd" in current_stage:
+                  next_stage = "4th Service (Free)"
+                  next_due_calc = base_date + timedelta(days=365)
+                else:
+                  next_stage = "Subsequent Service (Paid)"
+                  next_due_calc = base_date + timedelta(days=90)
               else:
-                next_stage = "Subsequent Service (Paid)"
-                next_due_calc = base_date + timedelta(days=90)
-            else:
-              if "1st" in current_stage:
-                next_stage = "2nd Service (Free)"
-                next_due_calc = base_date + timedelta(days=180)
-              elif "2nd" in current_stage:
-                next_stage = "3rd Service (Free)"
-                next_due_calc = base_date + timedelta(days=365)
-              elif "3rd" in current_stage:
-                next_stage = "4th Service (Paid)"
-                next_due_calc = base_date + timedelta(days=548)
-              else:
-                next_stage = "Subsequent Service (Paid)"
-                next_due_calc = base_date + timedelta(days=180)
+                if "1st" in current_stage:
+                  next_stage = "2nd Service (Free)"
+                  next_due_calc = base_date + timedelta(days=180)
+                elif "2nd" in current_stage:
+                  next_stage = "3rd Service (Free)"
+                  next_due_calc = base_date + timedelta(days=365)
+                elif "3rd" in current_stage:
+                  next_stage = "4th Service (Paid)"
+                  next_due_calc = base_date + timedelta(days=548)
+                else:
+                  next_stage = "Subsequent Service (Paid)"
+                  next_due_calc = base_date + timedelta(days=180)
 
-            df.loc[index, "Current_Service_Stage"] = next_stage
-            df.loc[index, "Latest_Service_Date"] = str(base_date)
-            df.loc[index, "Next_Due_Date"] = str(next_due_calc)
-            df.loc[index, "Status"] = "Completed"
+              df.loc[match_i, "Current_Service_Stage"] = next_stage
+              df.loc[match_i, "Latest_Service_Date"] = str(base_date)
+              df.loc[match_i, "Next_Due_Date"] = str(next_due_calc)
+              df.loc[match_i, "Status"] = "Completed"
 
-            save_data_to_cloud(df)
-            st.success(
-                f"Service completed for {row['Name']}! Next milestone:"
-                f" {next_due_calc}."
-            )
-            st.rerun()
+              save_data_to_cloud(df)
+              st.success(
+                  f"Service completed for {cust_name}! Next milestone:"
+                  f" {next_due_calc}."
+              )
+              st.rerun()
     else:
       st.info("No active service calls due right now.")
   else:
