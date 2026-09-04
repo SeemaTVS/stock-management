@@ -70,7 +70,6 @@ def load_data():
     except Exception:
         pass
 
-    # Fallback to local backup if online fetch fails
     if os.path.exists("inventory_backup.csv"):
         try:
             df_loaded = pd.read_csv("inventory_backup.csv")
@@ -135,7 +134,6 @@ def save_data(df_to_save):
     except Exception as e:
         st.sidebar.error(f"Sync error: {e}")
 
-# --- BACKGROUND AUTOMATIC BACKUP WORKER ---
 def background_backup_worker():
     while True:
         time.sleep(3600)  
@@ -179,7 +177,6 @@ def save_sale_to_cloud(new_sale_row_dict):
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
 
-# --- PDF GENERATOR FUNCTION ---
 def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
@@ -311,7 +308,7 @@ def parse_tvs_label(scanned_text):
 
     return part_no, description, mrp_val
 
-# --- DEALER BILL OCR PARSER ---
+# --- IMPROVED DEALER BILL OCR PARSER (EXTRACTS ACTUAL DESCRIPTION) ---
 def parse_dealer_bill(scanned_text):
     parsed_items = []
     if not scanned_text:
@@ -324,6 +321,17 @@ def parse_dealer_bill(scanned_text):
         match_pn = re.search(r'\b([A-Z0-9]{5,10})\b', line_upper)
         if match_pn and ("/" in line or len(line_upper) <= 12):
             potential_pn = match_pn.group(1)
+            
+            # Extract description text from the same line or adjacent lines (stripping out part number & numbers)
+            raw_desc_candidate = line.replace(potential_pn, "").strip()
+            if len(raw_desc_candidate) < 3 and i > 0:
+                raw_desc_candidate = lines[i-1] # check preceding line if description wrapped
+            
+            # Clean up unwanted symbols/numbers from description
+            cleaned_desc = re.sub(r'[\d\.\/\-\#]+', '', raw_desc_candidate).strip()
+            if len(cleaned_desc) < 3:
+                cleaned_desc = f"Part {potential_pn}"
+
             collected_numbers = []
             for j in range(i, min(i + 6, len(lines))):
                 nums = re.findall(r'\b\d+(?:\.\d{2})?\b', lines[j])
@@ -341,7 +349,7 @@ def parse_dealer_bill(scanned_text):
                         "part_number": potential_pn,
                         "qty": qty,
                         "mrp": mrp,
-                        "description": f"Auto-imported part {potential_pn}"
+                        "description": cleaned_desc
                     })
     return parsed_items
 
@@ -384,6 +392,7 @@ with st.sidebar.expander("📄 Scan Dealer Purchase Bill"):
                         p_no = item["part_number"].strip().upper()
                         b_qty = item["qty"]
                         b_mrp = item["mrp"]
+                        b_desc = item["description"]
                         b_cost = round(b_mrp * 0.84, 2)
                         
                         existing_match = df[df['part_number'].astype(str).str.strip().str.upper() == p_no]
@@ -394,10 +403,14 @@ with st.sidebar.expander("📄 Scan Dealer Purchase Bill"):
                             df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'stock_qty'] = new_qty
                             df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'unit_mrp'] = float(b_mrp)
                             df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'unit_cost'] = float(b_cost)
+                            # Update description if it was previously generic
+                            current_desc = str(existing_match.iloc[0]['description'])
+                            if "Auto-imported" in current_desc or not current_desc.strip():
+                                df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'description'] = b_desc
                         else:
                             new_row = pd.DataFrame([{
                                 'part_number': p_no,
-                                'description': item['description'],
+                                'description': b_desc,
                                 'model': 'Universal',
                                 'unit_cost': float(b_cost),
                                 'unit_mrp': float(b_mrp),
@@ -523,7 +536,7 @@ else:
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
-        st.caption("You can freely edit item details and customize unit costs here, or perform bulk deletion of obsolete parts.")
+        st.caption("You can freely edit item descriptions, costs, and details here, or perform bulk deletion of obsolete parts.")
         
         editor_input_df = df.drop(columns=['status'], errors='ignore')
         edited_df = st.data_editor(editor_input_df, num_rows="dynamic", key="editor")
@@ -566,8 +579,6 @@ else:
 
     with tab3:
         st.subheader("Record New Sale Transaction")
-        st.caption("Select sold items, enter customer WhatsApp number side-by-side, and complete checkout to generate the invoice.")
-        
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         
         st.markdown("### 📱 Customer WhatsApp Number")
@@ -729,7 +740,6 @@ else:
                     """,
                     unsafe_allow_html=True
                 )
-                st.caption("Tip: Download the PDF above first, tap the WhatsApp button to open chat with the customer, and attach your downloaded file.")
             else:
                 st.info("💡 Enter a valid 10-digit customer WhatsApp number before checkout to activate the direct WhatsApp share button.")
 
@@ -764,7 +774,6 @@ else:
 
             st.markdown("---")
             st.markdown("### Transaction Log & Details")
-            
             st.dataframe(filtered_sales, use_container_width=True)
 
             csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
@@ -776,4 +785,3 @@ else:
             )
         else:
             st.info("No sales transactions found yet.")
-            
