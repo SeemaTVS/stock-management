@@ -482,4 +482,4 @@ with st.sidebar.form("unified_part_form"):
                     'min_threshold': int(f_min),
                     'units_sold': 0
                 }])
-                df = pd.concat([df, new_row], ignore_index=T
+                df = pd.concat([df, new_row], ignore_index=T)
