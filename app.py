@@ -48,7 +48,7 @@ CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
 EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
 SALES_COLS = ['timestamp', 'customer_name', 'items_detail', 'parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit', 'month_year']
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def load_data():
     try:
         cache_buster = int(time.time())
@@ -65,17 +65,27 @@ def load_data():
             
         df_loaded = df_loaded.dropna(subset=['part_number'])
         df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
-        return df_loaded
-    except Exception as e:
-        if os.path.exists("inventory_backup.csv"):
-            try:
-                df_loaded = pd.read_csv("inventory_backup.csv")
-                st.warning("⚠️ Network/Google Sheet unreachable. Loaded from local emergency backup file.")
-                return df_loaded
-            except Exception:
-                pass
-        st.warning(f"Could not load online Google Sheet, using empty fallback. Details: {e}")
-        return pd.DataFrame(columns=EXPECTED_COLS)
+        if not df_loaded.empty:
+            return df_loaded
+    except Exception:
+        pass
+
+    # Fallback to local backup if online fetch fails
+    if os.path.exists("inventory_backup.csv"):
+        try:
+            df_loaded = pd.read_csv("inventory_backup.csv")
+            for col in EXPECTED_COLS:
+                if col not in df_loaded.columns:
+                    df_loaded[col] = ""
+            num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+            for col in num_cols:
+                df_loaded[col] = pd.to_numeric(df_loaded[col], errors='coerce').fillna(0)
+            st.warning("⚠️ Loaded inventory from local backup file.")
+            return df_loaded
+        except Exception:
+            pass
+
+    return pd.DataFrame(columns=EXPECTED_COLS)
 
 def save_data(df_to_save):
     try:
@@ -116,14 +126,14 @@ def save_data(df_to_save):
                     "type": "inventory",
                     "data": clean_records
                 }
-                response = requests.post(WEB_APP_URL, json=payload, timeout=10)
+                response = requests.post(WEB_APP_URL, json=payload, timeout=15)
                 
             if response.status_code == 200:
                 st.sidebar.success("Successfully synced!")
             else:
                 st.sidebar.error(f"Sync failed: {response.status_code}")
     except Exception as e:
-        st.sidebar.error(f"Float/Sync error: {e}")
+        st.sidebar.error(f"Sync error: {e}")
 
 # --- BACKGROUND AUTOMATIC BACKUP WORKER ---
 def background_backup_worker():
@@ -145,7 +155,7 @@ if not st.session_state.get('backup_thread_started', False):
 def load_sales_log():
     try:
         if WEB_APP_URL:
-            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=2, allow_redirects=True)
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=5, allow_redirects=True)
             if response.status_code == 200:
                 sales_data = response.json()
                 if isinstance(sales_data, list):
@@ -165,7 +175,7 @@ def save_sale_to_cloud(new_sale_row_dict):
                 "type": "sale",
                 "data": new_sale_row_dict
             }
-            requests.post(WEB_APP_URL, json=payload, timeout=10)
+            requests.post(WEB_APP_URL, json=payload, timeout=15)
     except Exception as e:
         st.error(f"Error saving sale to cloud: {e}")
 
@@ -309,13 +319,11 @@ def parse_dealer_bill(scanned_text):
         
     lines = [l.strip() for l in scanned_text.split('\n') if l.strip()]
     
-    # Simple heuristic line parser looking for TVS part numbers and numeric sequences
     for i, line in enumerate(lines):
         line_upper = line.upper()
         match_pn = re.search(r'\b([A-Z0-9]{5,10})\b', line_upper)
         if match_pn and ("/" in line or len(line_upper) <= 12):
             potential_pn = match_pn.group(1)
-            # Gather subsequent numbers on current or nearby lines for Qty and initial MRP
             collected_numbers = []
             for j in range(i, min(i + 6, len(lines))):
                 nums = re.findall(r'\b\d+(?:\.\d{2})?\b', lines[j])
@@ -323,7 +331,6 @@ def parse_dealer_bill(scanned_text):
                     collected_numbers.append(float(n))
             
             if len(collected_numbers) >= 2:
-                # The first reliable integer or small float near the front is often qty, subsequent is MRP
                 qty = int(collected_numbers[0]) if collected_numbers[0] < 1000 else 1
                 mrp = collected_numbers[1] if len(collected_numbers) > 1 else 0.0
                 if mrp < qty and len(collected_numbers) > 2:
@@ -382,14 +389,12 @@ with st.sidebar.expander("📄 Scan Dealer Purchase Bill"):
                         existing_match = df[df['part_number'].astype(str).str.strip().str.upper() == p_no]
                         
                         if not existing_match.empty:
-                            # Item exists: update stock qty and MRP, retain existing custom name/description
                             current_qty = int(existing_match.iloc[0]['stock_qty'])
                             new_qty = current_qty + b_qty
                             df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'stock_qty'] = new_qty
                             df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'unit_mrp'] = float(b_mrp)
                             df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'unit_cost'] = float(b_cost)
                         else:
-                            # New item: add with extracted details
                             new_row = pd.DataFrame([{
                                 'part_number': p_no,
                                 'description': item['description'],
@@ -482,4 +487,293 @@ with st.sidebar.form("unified_part_form"):
                     'min_threshold': int(f_min),
                     'units_sold': 0
                 }])
-                df = pd.concat([df, new_row], ignore_index=T)
+                df = pd.concat([df, new_row], ignore_index=True)
+                st.success(f"Successfully added new part {clean_pn}!")
+            
+            save_data(df)
+            time.sleep(1)
+            st.rerun()
+
+st.sidebar.markdown("---")
+
+# --- MAIN DASHBOARD TABS ---
+if df.empty:
+    st.warning("⚠️ Inventory dataset is currently empty. Use the sidebar on the left to add your first part number or check your Google Sheet export URL connection.")
+else:
+    def calculate_status(row):
+        if row['stock_qty'] == 0:
+            return "OUT OF STOCK"
+        elif row['stock_qty'] <= row['min_threshold']:
+            return "REORDER NEEDED"
+        else:
+            return "IN STOCK"
+
+    df['status'] = df.apply(calculate_status, axis=1)
+
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Overview & Stock", 
+        "✏️ Edit Master Data", 
+        "🛒 Record Sale",
+        "📈 Sales & Profit Reports"
+    ])
+
+    with tab1:
+        st.subheader("Current Stock Inventory")
+        st.dataframe(df[['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'units_sold', 'status']], use_container_width=True)
+
+    with tab2:
+        st.subheader("Interactive Master Data Editor")
+        st.caption("You can freely edit item details and customize unit costs here, or perform bulk deletion of obsolete parts.")
+        
+        editor_input_df = df.drop(columns=['status'], errors='ignore')
+        edited_df = st.data_editor(editor_input_df, num_rows="dynamic", key="editor")
+        
+        col_save_editor, col_bulk_del = st.columns([1, 1])
+        with col_save_editor:
+            if st.button("Save Changes to Google Sheet"):
+                try:
+                    for col in EXPECTED_COLS:
+                        if col not in edited_df.columns:
+                            edited_df[col] = ""
+                    
+                    num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+                    for col in num_cols:
+                        edited_df[col] = pd.to_numeric(edited_df[col], errors='coerce').fillna(0)
+                        
+                    edited_df['part_number'] = edited_df['part_number'].astype(str).str.strip()
+                    edited_df = edited_df.dropna(subset=['part_number'])
+                    edited_df = edited_df[edited_df['part_number'] != ""]
+                    
+                    save_data(edited_df)
+                    st.success("Master data changes successfully saved and synced!")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error saving master data: {e}")
+                
+        st.markdown("---")
+        st.subheader("🗑️ Bulk Delete Obsolete Parts")
+        parts_to_delete = st.multiselect("Select Part Numbers to Delete in Batch", df['part_number'].tolist(), key="bulk_delete_select")
+        if st.button("Delete Selected Parts", type="primary"):
+            if parts_to_delete:
+                df = df[~df['part_number'].isin(parts_to_delete)]
+                save_data(df)
+                st.success(f"Successfully deleted {len(parts_to_delete)} parts!")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.warning("Please select at least one part number to delete.")
+
+    with tab3:
+        st.subheader("Record New Sale Transaction")
+        st.caption("Select sold items, enter customer WhatsApp number side-by-side, and complete checkout to generate the invoice.")
+        
+        cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
+        
+        st.markdown("### 📱 Customer WhatsApp Number")
+        col_cc, col_num = st.columns([1, 4])
+        with col_cc:
+            country_code = st.text_input("Code", value="91")
+        with col_num:
+            cust_phone_10 = st.text_input("10-Digit WhatsApp Number", max_chars=10, placeholder="e.g. 6380965289")
+
+        selected_billing_parts = st.multiselect("Select Parts Sold", df['part_number'].tolist(), key="sale_parts_select")
+        
+        bill_items = []
+        parts_mrp_total = 0.0
+        parts_cost_total = 0.0
+        
+        if selected_billing_parts:
+            st.markdown("### Sold Quantities")
+            for part in selected_billing_parts:
+                row_data = df[df['part_number'] == part].iloc[0]
+                desc = row_data['description']
+                mrp = float(row_data['unit_mrp'])
+                cost = float(row_data['unit_cost'])
+                avail_qty = int(row_data['stock_qty'])
+                
+                col_q1, col_q2 = st.columns([3, 1])
+                with col_q1:
+                    st.write(f"**{desc}** (MRP: Rs. {mrp}) | Stock: {avail_qty}")
+                with col_q2:
+                    qty_sold = st.number_input(f"Qty [{part}]", min_value=1, max_value=max(1, avail_qty), value=1, key=f"sale_qty_{part}")
+                
+                item_mrp_sum = mrp * qty_sold
+                item_cost_sum = cost * qty_sold
+                parts_mrp_total += item_mrp_sum
+                parts_cost_total += item_cost_sum
+                bill_items.append({
+                    "part": part, 
+                    "desc": desc, 
+                    "qty": qty_sold, 
+                    "mrp": mrp, 
+                    "cost": cost,
+                    "mrp_total": item_mrp_sum,
+                    "cost_total": item_cost_sum
+                })
+            
+            st.markdown("---")
+            col_add1, col_add2 = st.columns(2)
+            with col_add1:
+                service_charge = st.number_input("Service / Labor Charge (Rs.)", min_value=0.0, value=0.0, step=10.0)
+            with col_add2:
+                discount_val = st.number_input("Discount (Rs.)", min_value=0.0, value=0.0, step=10.0)
+                
+            final_grand_total = max(0.0, parts_mrp_total + service_charge - discount_val)
+            expected_net_profit = final_grand_total - parts_cost_total
+            
+            taxable_base_total = parts_mrp_total / 1.18
+            total_cgst = taxable_base_total * 0.09
+            total_sgst = taxable_base_total * 0.09
+            
+            col_p1, col_p2, col_p3 = st.columns(3)
+            with col_p1:
+                st.metric("Parts Total (MRP)", f"Rs. {parts_mrp_total:.2f}")
+            with col_p2:
+                st.metric("Grand Total (Sale Price)", f"Rs. {final_grand_total:.2f}")
+            with col_p3:
+                st.metric("Net Profit", f"Rs. {expected_net_profit:.2f}")
+            
+            if st.button("Complete Checkout & Generate Bill PDF", type="primary"):
+                sale_success = True
+                for item in bill_items:
+                    p_no = item["part"]
+                    q_sold = item["qty"]
+                    current_stock = int(df.loc[df['part_number'] == p_no, 'stock_qty'].values[0])
+                    if current_stock >= q_sold:
+                        df.loc[df['part_number'] == p_no, 'stock_qty'] -= q_sold
+                        df.loc[df['part_number'] == p_no, 'units_sold'] += q_sold
+                    else:
+                        st.error(f"Error: Not enough stock for {p_no}!")
+                        sale_success = False
+                
+                if sale_success:
+                    save_data(df)
+                    
+                    now_stamp = pd.Timestamp.now()
+                    time_str = now_stamp.strftime('%Y-%m-%d %H:%M:%S')
+                    items_summary = "; ".join([f"{i['desc']} x{i['qty']}" for i in bill_items])
+                    
+                    new_sale_dict = {
+                        'timestamp': time_str,
+                        'customer_name': cust_name.strip(),
+                        'items_detail': items_summary,
+                        'parts_total': float(parts_mrp_total),
+                        'service_charge': float(service_charge),
+                        'discount': float(discount_val),
+                        'grand_total': float(final_grand_total),
+                        'total_cost': float(parts_cost_total),
+                        'net_profit': float(expected_net_profit),
+                        'month_year': now_stamp.strftime('%Y-%m')
+                    }
+                    
+                    save_sale_to_cloud(new_sale_dict)
+                    
+                    pdf_path = generate_invoice_pdf(
+                        cust_name.strip(), 
+                        bill_items, 
+                        parts_mrp_total, 
+                        total_cgst, 
+                        total_sgst, 
+                        service_charge, 
+                        discount_val, 
+                        final_grand_total, 
+                        time_str
+                    )
+                    
+                    with open(pdf_path, "rb") as pdf_file:
+                        st.session_state['last_pdf_bytes'] = pdf_file.read()
+                        
+                    st.session_state['last_pdf_filename'] = f"Invoice_{cust_name.strip().replace(' ', '_')}_{now_stamp.strftime('%Y%m%d_%H%M%S')}.pdf"
+                    
+                    cleaned_phone = re.sub(r'\D', '', cust_phone_10.strip())
+                    if len(cleaned_phone) == 10:
+                        full_whatsapp_number = f"{country_code.strip()}{cleaned_phone}"
+                        wa_message = (
+                            f"Hello *{cust_name.strip()}*, thank you for visiting *SEEMA TVS*! "
+                            f"Your bill summary for total Rs. *{final_grand_total:.2f}* has been generated. "
+                            f"Please find your official tax invoice attached."
+                        )
+                        encoded_wa_msg = urllib.parse.quote(wa_message)
+                        st.session_state['last_whatsapp_url'] = f"https://wa.me/{full_whatsapp_number}?text={encoded_wa_msg}"
+                    else:
+                        st.session_state['last_whatsapp_url'] = ""
+
+                    st.session_state['sale_completed'] = True
+
+                    try:
+                        os.remove(pdf_path)
+                    except Exception:
+                        pass
+                    st.rerun()
+
+        if st.session_state.get('sale_completed', False):
+            st.success("Sale completed successfully! Inventory & sales report updated.")
+            
+            if 'last_pdf_bytes' in st.session_state:
+                st.download_button(
+                    label="📄 Download Generated Tax Invoice (PDF)",
+                    data=st.session_state['last_pdf_bytes'],
+                    file_name=st.session_state.get('last_pdf_filename', 'Invoice.pdf'),
+                    mime="application/pdf"
+                )
+            
+            if st.session_state.get('last_whatsapp_url'):
+                st.markdown(
+                    f"""
+                    <a href="{st.session_state['last_whatsapp_url']}" target="_blank">
+                        <button style="background-color:#25D366; color:white; border:none; padding:10px 20px; font-size:16px; border-radius:5px; cursor:pointer; font-weight:bold; width:100%; margin-top:10px;">
+                            💬 Send Bill Summary on WhatsApp
+                        </button>
+                    </a>
+                    """,
+                    unsafe_allow_html=True
+                )
+                st.caption("Tip: Download the PDF above first, tap the WhatsApp button to open chat with the customer, and attach your downloaded file.")
+            else:
+                st.info("💡 Enter a valid 10-digit customer WhatsApp number before checkout to activate the direct WhatsApp share button.")
+
+    with tab4:
+        st.subheader("Sales Performance & Monthly Profit Reports")
+        
+        if not sales_df.empty:
+            num_cols_s = ['parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit']
+            for col in num_cols_s:
+                sales_df[col] = pd.to_numeric(sales_df[col], errors='coerce').fillna(0)
+
+            unique_months = sorted(sales_df['month_year'].dropna().astype(str).unique().tolist(), reverse=True)
+            months = ["All Months"] + unique_months
+            selected_month = st.selectbox("Select Reporting Month", months)
+            
+            if selected_month != "All Months":
+                filtered_sales = sales_df[sales_df['month_year'] == selected_month]
+            else:
+                filtered_sales = sales_df.copy()
+                
+            st.markdown("---")
+            
+            m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+            with m_col1:
+                st.metric("Total Transactions", len(filtered_sales))
+            with m_col2:
+                st.metric("Total Revenue (Sales)", f"Rs. {filtered_sales['grand_total'].sum():,.2f}")
+            with m_col3:
+                st.metric("Total Costs", f"Rs. {filtered_sales['total_cost'].sum():,.2f}")
+            with m_col4:
+                st.metric("Net Profit", f"Rs. {filtered_sales['net_profit'].sum():,.2f}")
+
+            st.markdown("---")
+            st.markdown("### Transaction Log & Details")
+            
+            st.dataframe(filtered_sales, use_container_width=True)
+
+            csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Export Selected Sales Data (CSV)",
+                data=csv_data,
+                file_name=f"Sales_Report_{selected_month}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("No sales transactions found yet.")
+            
