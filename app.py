@@ -48,7 +48,7 @@ CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
 EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
 SALES_COLS = ['timestamp', 'customer_name', 'items_detail', 'parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit', 'month_year']
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=10)
 def load_data():
     try:
         cache_buster = int(time.time())
@@ -65,25 +65,18 @@ def load_data():
             
         df_loaded = df_loaded.dropna(subset=['part_number'])
         df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
-        if not df_loaded.empty:
-            return df_loaded
-    except Exception:
-        pass
-
-    if os.path.exists("inventory_backup.csv"):
-        try:
-            df_loaded = pd.read_csv("inventory_backup.csv")
-            for col in EXPECTED_COLS:
-                if col not in df_loaded.columns:
-                    df_loaded[col] = ""
-            num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
-            for col in num_cols:
-                df_loaded[col] = pd.to_numeric(df_loaded[col], errors='coerce').fillna(0)
-            return df_loaded
-        except Exception:
-            pass
-
-    return pd.DataFrame(columns=EXPECTED_COLS)
+        return df_loaded
+    except Exception as e:
+        # Emergency Local Backup Fallback
+        if os.path.exists("inventory_backup.csv"):
+            try:
+                df_loaded = pd.read_csv("inventory_backup.csv")
+                st.warning("⚠️ Network/Google Sheet unreachable. Loaded from local emergency backup file.")
+                return df_loaded
+            except Exception:
+                pass
+        st.warning(f"Could not load online Google Sheet, using empty fallback. Details: {e}")
+        return pd.DataFrame(columns=EXPECTED_COLS)
 
 def save_data(df_to_save):
     try:
@@ -105,31 +98,39 @@ def save_data(df_to_save):
         df_to_save = df_to_save.dropna(subset=['part_number'])
         df_to_save = df_to_save[df_to_save['part_number'] != ""]
 
+        # Always save local safety snapshot immediately
         df_to_save.to_csv("inventory_backup.csv", index=False)
 
         if WEB_APP_URL:
-            records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
-            clean_records = []
-            for row in records:
-                clean_row = {}
-                for k, v in row.items():
-                    if isinstance(v, float) and (pd.isna(v) or v == float('inf') or v == float('-inf')):
-                        clean_row[k] = 0.0
-                    else:
-                        clean_row[k] = v
-                clean_records.append(clean_row)
+            with st.spinner("Syncing changes to Google Sheet..."):
+                records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
+                clean_records = []
+                for row in records:
+                    clean_row = {}
+                    for k, v in row.items():
+                        if isinstance(v, float) and (pd.isna(v) or v == float('inf') or v == float('-inf')):
+                            clean_row[k] = 0.0
+                        else:
+                            clean_row[k] = v
+                    clean_records.append(clean_row)
 
-            payload = {
-                "type": "inventory",
-                "data": clean_records
-            }
-            requests.post(WEB_APP_URL, json=payload, timeout=15)
-    except Exception:
-        pass
+                payload = {
+                    "type": "inventory",
+                    "data": clean_records
+                }
+                response = requests.post(WEB_APP_URL, json=payload, timeout=10)
+                
+            if response.status_code == 200:
+                st.sidebar.success("Successfully synced!")
+            else:
+                st.sidebar.error(f"Sync failed: {response.status_code}")
+    except Exception as e:
+        st.sidebar.error(f"Float/Sync error: {e}")
 
+# --- BACKGROUND AUTOMATIC BACKUP WORKER ---
 def background_backup_worker():
     while True:
-        time.sleep(3600)  
+        time.sleep(3600)  # Runs every 1 hour
         try:
             if os.path.exists("inventory_backup.csv"):
                 timestamp_name = f"backups/inventory_backup_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -146,7 +147,7 @@ if not st.session_state.get('backup_thread_started', False):
 def load_sales_log():
     try:
         if WEB_APP_URL:
-            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=5, allow_redirects=True)
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=2, allow_redirects=True)
             if response.status_code == 200:
                 sales_data = response.json()
                 if isinstance(sales_data, list):
@@ -166,10 +167,11 @@ def save_sale_to_cloud(new_sale_row_dict):
                 "type": "sale",
                 "data": new_sale_row_dict
             }
-            requests.post(WEB_APP_URL, json=payload, timeout=15)
-    except Exception:
-        pass
+            requests.post(WEB_APP_URL, json=payload, timeout=10)
+    except Exception as e:
+        st.error(f"Error saving sale to cloud: {e}")
 
+# --- PDF GENERATOR FUNCTION ---
 def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
@@ -301,128 +303,6 @@ def parse_tvs_label(scanned_text):
 
     return part_no, description, mrp_val
 
-# --- ROBUST MULTI-LINE DEALER BILL PARSER ---
-def parse_dealer_bill(img):
-    parsed_items = []
-    try:
-        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-        n_boxes = len(data.get('text', []))
-        if n_boxes == 0:
-            return []
-        
-        rows = {}
-        for i in range(n_boxes):
-            text = data['text'][i].strip()
-            if not text:
-                continue
-            top = data['top'][i]
-            
-            row_key = None
-            for existing_top in rows:
-                if abs(existing_top - top) <= 14:
-                    row_key = existing_top
-                    break
-            if row_key is None:
-                row_key = top
-                rows[row_key] = []
-            rows[row_key].append((data['left'][i], text))
-            
-        sorted_row_keys = sorted(rows.keys())
-        current_item = None
-        
-        for r_top in sorted_row_keys:
-            try:
-                line_words = sorted(rows[r_top], key=lambda x: x[0])
-                line_tokens = [w[1] for w in line_words]
-                if not line_tokens:
-                    continue
-                    
-                line_text = " ".join(line_tokens)
-                line_upper = line_text.upper()
-                
-                if any(w in line_upper for w in ['INVOICE', 'GSTIN', 'JURISDICTION', 'ADDRESS', 'MOBILE', 'S.N', 'PART NO', 'RATE', 'QTY', 'MRP', 'DISCOUNT', 'TAX', 'DELIVERY', 'RECIPIENT']):
-                    continue
-                    
-                first_token = line_tokens[0].strip(".,")
-                is_new_row = False
-                if first_token.isdigit() and int(first_token) <= 50:
-                    if len(line_tokens) >= 2:
-                        potential_pn = re.sub(r'[^A-Z0-9\-]', '', line_tokens[1].upper())
-                        if len(potential_pn) >= 4:
-                            is_new_row = True
-
-                if is_new_row:
-                    if current_item:
-                        parsed_items.append(current_item)
-                    
-                    part_no = re.sub(r'[^A-Z0-9\-]', '', line_tokens[1].upper())
-                    desc_words = []
-                    numeric_tokens_found = []
-                    
-                    for idx in range(2, len(line_tokens)):
-                        tok = line_tokens[idx]
-                        clean_tok = re.sub(r'[^0-9.]', '', tok)
-                        if clean_tok and set(clean_tok) <= set('0123456789.'):
-                            try:
-                                val = float(clean_tok)
-                                numeric_tokens_found.append(val)
-                            except ValueError:
-                                desc_words.append(tok)
-                        else:
-                            desc_words.append(tok)
-                            
-                    qty = 1.0
-                    mrp = 0.0
-                    valid_prices = [n for n in numeric_tokens_found if n > 0]
-                    if len(valid_prices) >= 2:
-                        potential_qtys = [n for n in valid_prices[:3] if n < 100 and n.is_integer()]
-                        if potential_qtys:
-                            qty = potential_qtys[0]
-                            valid_prices.remove(qty)
-                        mrp = valid_prices[-1]
-                    elif len(valid_prices) == 1:
-                        mrp = valid_prices[0]
-
-                    current_item = {
-                        "part_number": part_no,
-                        "qty": int(qty),
-                        "mrp": float(mrp),
-                        "description_words": desc_words
-                    }
-                else:
-                    if current_item is not None:
-                        for tok in line_tokens:
-                            clean_tok = re.sub(r'[^0-9.]', '', tok)
-                            if clean_tok and set(clean_tok) <= set('0123456789.'):
-                                try:
-                                    val = float(clean_tok)
-                                    if val > current_item["mrp"]:
-                                        current_item["mrp"] = val
-                                except ValueError:
-                                    current_item["description_words"].append(tok)
-                            else:
-                                current_item["description_words"].append(tok)
-            except Exception:
-                continue
-                
-        if current_item:
-            parsed_items.append(current_item)
-            
-        finalized_items = []
-        for item in parsed_items:
-            clean_desc = " ".join(item["description_words"]).replace("/", " ").strip()
-            clean_desc = re.sub(r'\s+', ' ', clean_desc)
-            finalized_items.append({
-                "part_number": item["part_number"],
-                "qty": item["qty"],
-                "mrp": item["mrp"],
-                "description": clean_desc
-            })
-            
-        return finalized_items
-    except Exception:
-        return []
-
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("📷 Label Scanner")
 uploaded_photo = st.sidebar.file_uploader("Snap/Upload Part Sticker", type=["jpg", "jpeg", "png"])
@@ -442,58 +322,6 @@ if uploaded_photo:
             st.sidebar.warning("Could not auto-detect part number.")
     except Exception as e:
         st.sidebar.error(f"Scanner Error: {e}")
-
-st.sidebar.markdown("---")
-
-# --- DEALER BILL SCANNER EXPANDER ---
-st.sidebar.header("📋 Dealer Bill Ingestion")
-with st.sidebar.expander("📄 Scan Dealer Purchase Bill"):
-    uploaded_bill = st.file_uploader("Upload Dealer Bill Invoice", type=["jpg", "jpeg", "png"], key="dealer_bill_upload")
-    if uploaded_bill:
-        try:
-            bill_img = Image.open(uploaded_bill)
-            extracted_bill_items = parse_dealer_bill(bill_img)
-            
-            if extracted_bill_items:
-                st.success(f"Successfully extracted {len(extracted_bill_items)} items from bill!")
-                if st.button("Apply Scanned Bill to Inventory"):
-                    for item in extracted_bill_items:
-                        p_no = item["part_number"].strip().upper()
-                        b_qty = int(item["qty"])
-                        b_mrp = float(item["mrp"])
-                        b_desc = str(item["description"])
-                        b_cost = round(b_mrp * 0.84, 2)
-                        
-                        existing_match = df[df['part_number'].astype(str).str.strip().str.upper() == p_no]
-                        
-                        if not existing_match.empty:
-                            current_qty = int(existing_match.iloc[0]['stock_qty'])
-                            new_qty = current_qty + b_qty
-                            df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'stock_qty'] = new_qty
-                            df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'unit_mrp'] = float(b_mrp)
-                            df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'unit_cost'] = float(b_cost)
-                            df.loc[df['part_number'].astype(str).str.strip().str.upper() == p_no, 'description'] = b_desc
-                        else:
-                            new_row = pd.DataFrame([{
-                                'part_number': p_no,
-                                'description': b_desc,
-                                'model': 'Universal',
-                                'unit_cost': float(b_cost),
-                                'unit_mrp': float(b_mrp),
-                                'stock_qty': int(b_qty),
-                                'min_threshold': 5,
-                                'units_sold': 0
-                            }])
-                            df = pd.concat([df, new_row], ignore_index=True)
-                    
-                    save_data(df)
-                    st.success("Dealer bill successfully processed and inventory updated!")
-                    time.sleep(1)
-                    st.rerun()
-            else:
-                st.warning("Could not automatically parse items from the bill image. Please check image clarity.")
-        except Exception as e:
-            st.error(f"Bill Parsing Error: {e}")
 
 st.sidebar.markdown("---")
 
@@ -602,6 +430,8 @@ else:
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
+        st.caption("You can freely edit item details and customize unit costs here, or perform bulk deletion of obsolete parts.")
+        
         editor_input_df = df.drop(columns=['status'], errors='ignore')
         edited_df = st.data_editor(editor_input_df, num_rows="dynamic", key="editor")
         
@@ -629,8 +459,8 @@ else:
                     st.error(f"Error saving master data: {e}")
                 
         st.markdown("---")
-        st.subheader("🗑️ Delete Parts")
-        parts_to_delete = st.multiselect("Select Part Numbers to Delete", df['part_number'].tolist(), key="bulk_delete_select")
+        st.subheader("🗑️ Bulk Delete Obsolete Parts")
+        parts_to_delete = st.multiselect("Select Part Numbers to Delete in Batch", df['part_number'].tolist(), key="bulk_delete_select")
         if st.button("Delete Selected Parts", type="primary"):
             if parts_to_delete:
                 df = df[~df['part_number'].isin(parts_to_delete)]
@@ -643,9 +473,12 @@ else:
 
     with tab3:
         st.subheader("Record New Sale Transaction")
+        st.caption("Select sold items, enter customer WhatsApp number side-by-side, and complete checkout to generate the invoice.")
+        
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         
         st.markdown("### 📱 Customer WhatsApp Number")
+        # WhatsApp-style side-by-side layout
         col_cc, col_num = st.columns([1, 4])
         with col_cc:
             country_code = st.text_input("Code", value="91")
@@ -804,6 +637,9 @@ else:
                     """,
                     unsafe_allow_html=True
                 )
+                st.caption("Tip: Download the PDF above first, tap the WhatsApp button to open chat with the customer, and attach your downloaded file.")
+            else:
+                st.info("💡 Enter a valid 10-digit customer WhatsApp number before checkout to activate the direct WhatsApp share button.")
 
     with tab4:
         st.subheader("Sales Performance & Monthly Profit Reports")
@@ -836,6 +672,8 @@ else:
 
             st.markdown("---")
             st.markdown("### Transaction Log & Details")
+            
+            # Interactive data table showing transaction logs right inside the app
             st.dataframe(filtered_sales, use_container_width=True)
 
             csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
