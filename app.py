@@ -301,7 +301,7 @@ def parse_tvs_label(scanned_text):
 
     return part_no, description, mrp_val
 
-# --- ROBUST MULTI-ITEM DEALER BILL PARSER (USING IMAGE_TO_DATA ROW CLUSTERING) ---
+# --- ROBUST STRUCTURED DEALER BILL PARSER (COLUMN-BASED X-COORDINATE SORTING) ---
 def parse_dealer_bill(img):
     parsed_items = []
     try:
@@ -314,10 +314,11 @@ def parse_dealer_bill(img):
             if not text:
                 continue
             top = data['top'][i]
-            # Cluster words vertically within a 14-pixel tolerance window to form table rows
+            
+            # Cluster words vertically within a 12-pixel tolerance window to form table rows
             row_key = None
             for existing_top in rows:
-                if abs(existing_top - top) <= 14:
+                if abs(existing_top - top) <= 12:
                     row_key = existing_top
                     break
             if row_key is None:
@@ -329,59 +330,100 @@ def parse_dealer_bill(img):
         
         for r_top in sorted_row_keys:
             line_words = sorted(rows[r_top], key=lambda x: x[0])
-            line_text = " ".join([w[1] for w in line_words])
+            line_tokens = [w[1] for w in line_words]
+            line_text = " ".join(line_tokens)
             line_upper = line_text.upper()
             
-            if any(w in line_upper for w in ['TOTAL', 'CGST', 'SGST', 'INVOICE', 'GSTIN', 'SUBTOTAL', 'TAX', 'PAGE', 'RECIPIENT', 'JURISDICTION', 'RATE', 'QTY', 'MRP']):
+            # Skip header metadata rows
+            if any(w in line_upper for w in ['INVOICE', 'GSTIN', 'JURISDICTION', 'ADDRESS', 'MOBILE', 'S.N', 'PART NO', 'RATE', 'QTY', 'MRP', 'DISCOUNT', 'TAX']):
                 continue
                 
-            match = re.search(r'\b([A-Z0-9\-]{5,15})\b', line_text)
-            if match:
-                part_no = match.group(1).strip()
-                if part_no in ['LAKHNOW', 'SAMPURNA', 'UTTAR', 'PRADESH']:
-                    continue
+            # Check if row starts with a serial number index (e.g. 1, 2, 3 ... 12)
+            if not line_tokens:
+                continue
                 
-                # Filter out pure description words and find numeric tokens
-                tokens = line_text.split()
-                alpha_words = [t for t in tokens if t.isalpha() and len(t) > 1 and t.upper() not in ['HUB', 'COMP', 'REAR', 'WAVE', 'SPRING', 'WASHER', 'BOLT', 'CHAIN', 'ADJUSTER', 'HEX', 'NUT', 'SESP', 'BALL', 'BEARING', 'SEAT', 'ASSY', 'CABLE', 'THROTTLE', 'CLUTCH', 'LEVER', 'ABSORBER', 'WHEEL', 'SPOKES', 'NIPPLE', 'KIT', 'SPROCKET', 'DIA', 'BRAKE', 'TRU', 'ENGINE', 'OIL', 'SYNTHETIC']]
+            first_token = line_tokens[0].strip(".,")
+            if not first_token.isdigit():
+                continue
                 
-                # Better description extraction from tokens around the part number
-                desc_tokens = [t for t in tokens if t.upper() != part_no and not re.match(r'^\d+$', t)]
-                clean_desc = " ".join([t for t in desc_tokens if not re.match(r'^\d+\.\d+$', t)]).strip()
-                if not clean_desc or len(clean_desc) < 3:
-                    clean_desc = f"Part {part_no}"
+            serial_no = int(first_token)
+            if serial_no > 50: # Avoid misinterpreting page coordinates as serial numbers
+                continue
                 
-                # Extract all numeric figures in order
-                nums = []
-                for t in tokens:
-                    clean_t = re.sub(r'[^0-9.]', '', t)
-                    if clean_t and any(c.isdigit() for c in clean_t):
-                        try:
-                            nums.append(float(clean_t))
-                        except ValueError:
-                            pass
+            # Extract Part Number (expected to be the second distinct structural column)
+            part_no = ""
+            part_token_idx = -1
+            for idx in range(1, len(line_tokens)):
+                candidate = line_tokens[idx].strip()
+                # Part numbers are alphanumeric, usually 5 to 12 chars
+                if re.match(r'^[A-Z0-9\-]{5,12}$', candidate.upper()) and not candidate.isdigit():
+                    part_no = candidate.upper()
+                    part_token_idx = idx
+                    break
+            
+            if not part_no and len(line_tokens) > 1:
+                # Fallback check for part numbers that might be purely numeric or tightly bound
+                candidate = line_tokens[1].strip()
+                if len(candidate) >= 5:
+                    part_no = candidate.upper()
+                    part_token_idx = 1
+                    
+            if not part_no:
+                continue
                 
+            # Extract Description (everything between Part Number and the numeric pricing columns)
+            desc_words = []
+            numeric_tokens_found = []
+            
+            for idx in range(part_token_idx + 1, len(line_tokens)):
+                tok = line_tokens[idx]
+                clean_tok = re.sub(r'[^0-9.]', '', tok)
+                
+                # If token is a pure number or decimal price/qty
+                if clean_tok and set(clean_tok) <= set('0123456789.'):
+                    try:
+                        numeric_tokens_found.append(float(clean_tok))
+                    except ValueError:
+                        desc_words.append(tok)
+                else:
+                    desc_words.append(tok)
+                    
+            clean_desc = " ".join(desc_words).replace("/", " ").strip()
+            clean_desc = re.sub(r'\s+', ' ', clean_desc)
+            if not clean_desc or len(clean_desc) < 2:
+                clean_desc = f"TVS Part {part_no}"
+                
+            # Assign Qty and MRP strictly from parsed numeric columns
+            qty = 1.0
+            mrp = 0.0
+            
+            # Typically invoice columns order: Rate -> Qty -> MRP -> Tax% -> Dis% -> Total
+            # We filter/target realistic quantities (usually integer 1 to 50) and MRP values
+            valid_prices = [n for n in numeric_tokens_found if n > 0]
+            
+            if len(valid_prices) >= 3:
+                # Look for typical integer quantity among the first few numbers, or standard column position
+                potential_qtys = [n for n in valid_prices[:3] if n < 100 and n.is_integer()]
+                if potential_qtys:
+                    qty = potential_qtys[0]
+                    valid_prices.remove(qty)
+                else:
+                    qty = valid_prices[1]
+                mrp = valid_prices[-1] # MRP is typically the highest or last catalog price column before totals
+            elif len(valid_prices) == 2:
                 qty = 1.0
-                mrp = 0.0
+                mrp = valid_prices[1]
+            elif len(valid_prices) == 1:
+                mrp = valid_prices[0]
                 
-                # Locate Qty and MRP accurately from numeric columns
-                if len(nums) >= 3:
-                    qty = nums[1]
-                    mrp = nums[2]
-                elif len(nums) == 2:
-                    qty = nums[0]
-                    mrp = nums[1]
-                elif len(nums) == 1:
-                    mrp = nums[0]
-                    
-                if part_no and mrp > 0:
-                    parsed_items.append({
-                        "part_number": part_no.upper(),
-                        "qty": int(qty) if qty < 100 else 1,
-                        "mrp": float(mrp),
-                        "description": clean_desc
-                    })
-                    
+            if part_no and mrp > 0:
+                parsed_items.append({
+                    "part_number": part_no,
+                    "qty": int(qty),
+                    "mrp": float(mrp),
+                    "description": clean_desc
+                })
+                
         return parsed_items
     except Exception:
         return []
