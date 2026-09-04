@@ -301,39 +301,57 @@ def parse_tvs_label(scanned_text):
 
     return part_no, description, mrp_val
 
-# --- ROBUST MULTI-ITEM DEALER BILL PARSER ---
-def parse_dealer_bill(scanned_text):
+# --- ROBUST MULTI-ITEM DEALER BILL PARSER (USING IMAGE_TO_DATA ROW CLUSTERING) ---
+def parse_dealer_bill(img):
     parsed_items = []
     try:
-        if not scanned_text:
-            return parsed_items
-            
-        lines = [l.strip() for l in scanned_text.split('\n') if l.strip()]
+        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        n_boxes = len(data['text'])
         
-        for line in lines:
-            line_upper = line.upper()
-            if any(w in line_upper for w in ['TOTAL', 'CGST', 'SGST', 'INVOICE', 'GSTIN', 'SUBTOTAL', 'TAX', 'PAGE', 'RECIPIENT', 'JURISDICTION']):
+        rows = {}
+        for i in range(n_boxes):
+            text = data['text'][i].strip()
+            if not text:
+                continue
+            top = data['top'][i]
+            # Cluster words vertically within a 14-pixel tolerance window to form table rows
+            row_key = None
+            for existing_top in rows:
+                if abs(existing_top - top) <= 14:
+                    row_key = existing_top
+                    break
+            if row_key is None:
+                row_key = top
+                rows[row_key] = []
+            rows[row_key].append((data['left'][i], text))
+            
+        sorted_row_keys = sorted(rows.keys())
+        
+        for r_top in sorted_row_keys:
+            line_words = sorted(rows[r_top], key=lambda x: x[0])
+            line_text = " ".join([w[1] for w in line_words])
+            line_upper = line_text.upper()
+            
+            if any(w in line_upper for w in ['TOTAL', 'CGST', 'SGST', 'INVOICE', 'GSTIN', 'SUBTOTAL', 'TAX', 'PAGE', 'RECIPIENT', 'JURISDICTION', 'RATE', 'QTY', 'MRP']):
                 continue
                 
-            # Match lines starting with item index number (1 to 30) followed by a part number code
-            match = re.search(r'^(\d{1,2})\s+([A-Z0-9\-]{5,15})\s+(.*)$', line)
-            
+            match = re.search(r'\b([A-Z0-9\-]{5,15})\b', line_text)
             if match:
-                s_no = int(match.group(1))
-                if s_no > 30:
+                part_no = match.group(1).strip()
+                if part_no in ['LAKHNOW', 'SAMPURNA', 'UTTAR', 'PRADESH']:
                     continue
-                part_no = match.group(2).strip()
-                remainder = match.group(3)
                 
-                tokens = remainder.split()
+                # Filter out pure description words and find numeric tokens
+                tokens = line_text.split()
+                alpha_words = [t for t in tokens if t.isalpha() and len(t) > 1 and t.upper() not in ['HUB', 'COMP', 'REAR', 'WAVE', 'SPRING', 'WASHER', 'BOLT', 'CHAIN', 'ADJUSTER', 'HEX', 'NUT', 'SESP', 'BALL', 'BEARING', 'SEAT', 'ASSY', 'CABLE', 'THROTTLE', 'CLUTCH', 'LEVER', 'ABSORBER', 'WHEEL', 'SPOKES', 'NIPPLE', 'KIT', 'SPROCKET', 'DIA', 'BRAKE', 'TRU', 'ENGINE', 'OIL', 'SYNTHETIC']]
                 
-                # Keep ONLY pure alphabetic words for description (ignoring numbers, slashes, codes)
-                alpha_words = [t for t in tokens if t.isalpha() and len(t) > 1]
-                clean_desc = " ".join(alpha_words).strip()
-                if not clean_desc:
+                # Better description extraction from tokens around the part number
+                desc_tokens = [t for t in tokens if t.upper() != part_no and not re.match(r'^\d+$', t)]
+                clean_desc = " ".join([t for t in desc_tokens if not re.match(r'^\d+\.\d+$', t)]).strip()
+                if not clean_desc or len(clean_desc) < 3:
                     clean_desc = f"Part {part_no}"
                 
-                # Extract numeric values strictly by invoice column positions (Rate, Qty, MRP, etc.)
+                # Extract all numeric figures in order
                 nums = []
                 for t in tokens:
                     clean_t = re.sub(r'[^0-9.]', '', t)
@@ -346,7 +364,7 @@ def parse_dealer_bill(scanned_text):
                 qty = 1.0
                 mrp = 0.0
                 
-                # Column index positioning: nums[0]=Rate, nums[1]=Qty, nums[2]=MRP
+                # Locate Qty and MRP accurately from numeric columns
                 if len(nums) >= 3:
                     qty = nums[1]
                     mrp = nums[2]
@@ -355,11 +373,11 @@ def parse_dealer_bill(scanned_text):
                     mrp = nums[1]
                 elif len(nums) == 1:
                     mrp = nums[0]
-                
+                    
                 if part_no and mrp > 0:
                     parsed_items.append({
                         "part_number": part_no.upper(),
-                        "qty": int(qty),
+                        "qty": int(qty) if qty < 100 else 1,
                         "mrp": float(mrp),
                         "description": clean_desc
                     })
@@ -397,8 +415,7 @@ with st.sidebar.expander("📄 Scan Dealer Purchase Bill"):
     if uploaded_bill:
         try:
             bill_img = Image.open(uploaded_bill)
-            bill_ocr = pytesseract.image_to_string(bill_img)
-            extracted_bill_items = parse_dealer_bill(bill_ocr)
+            extracted_bill_items = parse_dealer_bill(bill_img)
             
             if extracted_bill_items:
                 st.success(f"Successfully extracted {len(extracted_bill_items)} items from bill!")
