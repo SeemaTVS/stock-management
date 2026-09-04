@@ -301,7 +301,7 @@ def parse_tvs_label(scanned_text):
 
     return part_no, description, mrp_val
 
-# --- SAFELY PROTECTED DEALER BILL PARSER ---
+# --- ROBUST MULTI-ITEM DEALER BILL PARSER ---
 def parse_dealer_bill(scanned_text):
     parsed_items = []
     try:
@@ -309,64 +309,62 @@ def parse_dealer_bill(scanned_text):
             return parsed_items
             
         lines = [l.strip() for l in scanned_text.split('\n') if l.strip()]
-        current_item = None
         
         for line in lines:
             line_upper = line.upper()
+            if any(w in line_upper for w in ['TOTAL', 'CGST', 'SGST', 'INVOICE', 'GSTIN', 'SUBTOTAL', 'TAX', 'PAGE', 'RECIPIENT', 'JURISDICTION']):
+                continue
+                
+            # Match lines starting with item index number (1 to 30) followed by a part number code
+            match = re.search(r'^(\d{1,2})\s+([A-Z0-9\-]{5,15})\s+(.*)$', line)
             
-            match_serial = re.match(r'^(\d{1,2})\s+([A-Z0-9\-]{5,12})', line)
-            if match_serial and int(match_serial.group(1)) <= 30:
-                if current_item and current_item.get("part_number") and current_item.get("mrp") > 0:
-                    parsed_items.append(current_item)
-                    
-                part_no = match_serial.group(2)
-                remaining_text = line[len(match_serial.group(0)):].strip()
-                current_item = {
-                    "part_number": part_no,
-                    "description_lines": [remaining_text] if remaining_text else [],
-                    "qty": 1.0,
-                    "mrp": 0.0
-                }
-            elif current_item is not None:
-                if any(w in line_upper for w in ['TOTAL', 'CGST', 'SGST', 'INVOICE', 'GSTIN']):
-                    if current_item.get("part_number") and current_item.get("mrp") > 0:
-                        parsed_items.append(current_item)
-                    current_item = None
+            if match:
+                s_no = int(match.group(1))
+                if s_no > 30:
                     continue
+                part_no = match.group(2).strip()
+                remainder = match.group(3)
+                
+                tokens = remainder.split()
+                
+                # Keep ONLY pure alphabetic words for description (ignoring numbers, slashes, codes)
+                alpha_words = [t for t in tokens if t.isalpha() and len(t) > 1]
+                clean_desc = " ".join(alpha_words).strip()
+                if not clean_desc:
+                    clean_desc = f"Part {part_no}"
+                
+                # Extract numeric values strictly by invoice column positions (Rate, Qty, MRP, etc.)
+                nums = []
+                for t in tokens:
+                    clean_t = re.sub(r'[^0-9.]', '', t)
+                    if clean_t and any(c.isdigit() for c in clean_t):
+                        try:
+                            nums.append(float(clean_t))
+                        except ValueError:
+                            pass
+                
+                qty = 1.0
+                mrp = 0.0
+                
+                # Column index positioning: nums[0]=Rate, nums[1]=Qty, nums[2]=MRP
+                if len(nums) >= 3:
+                    qty = nums[1]
+                    mrp = nums[2]
+                elif len(nums) == 2:
+                    qty = nums[0]
+                    mrp = nums[1]
+                elif len(nums) == 1:
+                    mrp = nums[0]
+                
+                if part_no and mrp > 0:
+                    parsed_items.append({
+                        "part_number": part_no.upper(),
+                        "qty": int(qty),
+                        "mrp": float(mrp),
+                        "description": clean_desc
+                    })
                     
-                nums = re.findall(r'\b\d+(?:\.\d{2})?\b', line)
-                if nums:
-                    for n_str in nums:
-                        val = float(n_str)
-                        if val < 50 and current_item["qty"] == 1.0:
-                            current_item["qty"] = val
-                        elif val > 50:
-                            current_item["mrp"] = val
-                
-                if not re.match(r'^[\d\.\s]+$', line):
-                    current_item["description_lines"].append(line)
-
-        if current_item and current_item.get("part_number") and current_item.get("mrp") > 0:
-            parsed_items.append(current_item)
-
-        final_cleaned_items = []
-        for item in parsed_items:
-            raw_desc = " ".join(item["description_lines"])
-            words = raw_desc.split()
-            # Keep ONLY pure alphabetic words (ignoring numbers, slashes, codes)
-            alpha_words = [w for w in words if w.isalpha() and len(w) > 1]
-            
-            clean_desc = " ".join(alpha_words).strip()
-            if not clean_desc:
-                clean_desc = f"Part {item['part_number']}"
-                
-            final_cleaned_items.append({
-                "part_number": item["part_number"].strip().upper(),
-                "qty": int(item["qty"]),
-                "mrp": float(item["mrp"]),
-                "description": clean_desc
-            })
-        return final_cleaned_items
+        return parsed_items
     except Exception:
         return []
 
@@ -407,9 +405,9 @@ with st.sidebar.expander("📄 Scan Dealer Purchase Bill"):
                 if st.button("Apply Scanned Bill to Inventory"):
                     for item in extracted_bill_items:
                         p_no = item["part_number"].strip().upper()
-                        b_qty = item["qty"]
-                        b_mrp = item["mrp"]
-                        b_desc = item["description"]
+                        b_qty = int(item["qty"])
+                        b_mrp = float(item["mrp"])
+                        b_desc = str(item["description"])
                         b_cost = round(b_mrp * 0.84, 2)
                         
                         existing_match = df[df['part_number'].astype(str).str.strip().str.upper() == p_no]
@@ -577,8 +575,8 @@ else:
                     st.error(f"Error saving master data: {e}")
                 
         st.markdown("---")
-        st.subheader("🗑️ Bulk Delete Obsolete Parts")
-        parts_to_delete = st.multiselect("Select Part Numbers to Delete in Batch", df['part_number'].tolist(), key="bulk_delete_select")
+        st.subheader("🗑️ Delete Parts")
+        parts_to_delete = st.multiselect("Select Part Numbers to Delete", df['part_number'].tolist(), key="bulk_delete_select")
         if st.button("Delete Selected Parts", type="primary"):
             if parts_to_delete:
                 df = df[~df['part_number'].isin(parts_to_delete)]
