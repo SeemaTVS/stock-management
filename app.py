@@ -301,7 +301,7 @@ def parse_tvs_label(scanned_text):
 
     return part_no, description, mrp_val
 
-# --- HARDENED DEALER BILL PARSER WITH FALLBACK ---
+# --- POSITION-BASED DEALER BILL PARSER ---
 def parse_dealer_bill(img):
     parsed_items = []
     try:
@@ -333,7 +333,7 @@ def parse_dealer_bill(img):
             try:
                 line_words = sorted(rows[r_top], key=lambda x: x[0])
                 line_tokens = [w[1] for w in line_words]
-                if not line_tokens:
+                if len(line_tokens) < 4:
                     continue
                 
                 line_text = " ".join(line_tokens)
@@ -345,40 +345,25 @@ def parse_dealer_bill(img):
                 first_token = line_tokens[0].strip(".,")
                 if not first_token.isdigit():
                     continue
-                    
                 serial_no = int(first_token)
                 if serial_no > 50:
                     continue
-                    
-                part_no = ""
-                part_token_idx = -1
-                for idx in range(1, len(line_tokens)):
-                    candidate = line_tokens[idx].strip()
-                    clean_cand = re.sub(r'[^A-Z0-9\-]', '', candidate.upper())
-                    if len(clean_cand) >= 4 and not clean_cand.isdigit():
-                        part_no = clean_cand
-                        part_token_idx = idx
-                        break
                 
-                if not part_no and len(line_tokens) > 1:
-                    candidate = line_tokens[1].strip()
-                    if len(candidate) >= 4:
-                        part_no = re.sub(r'[^A-Z0-9\-]', '', candidate.upper())
-                        part_token_idx = 1
-                        
-                if not part_no:
+                part_no = re.sub(r'[^A-Z0-9\-]', '', line_tokens[1].upper())
+                if len(part_no) < 4:
                     continue
-                    
+                
                 desc_words = []
                 numeric_tokens_found = []
                 
-                for idx in range(part_token_idx + 1, len(line_tokens)):
+                for idx in range(2, len(line_tokens)):
                     tok = line_tokens[idx]
                     clean_tok = re.sub(r'[^0-9.]', '', tok)
                     
                     if clean_tok and set(clean_tok) <= set('0123456789.'):
                         try:
-                            numeric_tokens_found.append(float(clean_tok))
+                            val = float(clean_tok)
+                            numeric_tokens_found.append(val)
                         except ValueError:
                             desc_words.append(tok)
                     else:
@@ -386,21 +371,16 @@ def parse_dealer_bill(img):
                         
                 clean_desc = " ".join(desc_words).replace("/", " ").strip()
                 clean_desc = re.sub(r'\s+', ' ', clean_desc)
-                if not clean_desc or len(clean_desc) < 2:
-                    clean_desc = f"TVS Part {part_no}"
-                    
+                
                 qty = 1.0
                 mrp = 0.0
                 
                 valid_prices = [n for n in numeric_tokens_found if n > 0]
-                
                 if len(valid_prices) >= 2:
                     potential_qtys = [n for n in valid_prices[:3] if n < 100 and n.is_integer()]
                     if potential_qtys:
                         qty = potential_qtys[0]
                         valid_prices.remove(qty)
-                    else:
-                        qty = 1.0
                     mrp = valid_prices[-1]
                 elif len(valid_prices) == 1:
                     mrp = valid_prices[0]
