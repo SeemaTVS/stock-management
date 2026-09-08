@@ -5,7 +5,6 @@ import requests
 import time
 import os
 import threading
-from PIL import Image
 import shutil
 
 # --- PDF GENERATION LIBRARIES ---
@@ -14,18 +13,6 @@ from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 import tempfile
 import urllib.parse
-
-# Safe Tesseract Setup with fallback
-try:
-    tesseract_path = shutil.which("tesseract")
-    if tesseract_path:
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = tesseract_path
-    else:
-        import pytesseract
-        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-except Exception:
-    pass
 
 st.set_page_config(
     page_title="TVS Agency Inventory Dashboard", 
@@ -48,7 +35,7 @@ CSV_EXPORT_URL = get_csv_export_url(GOOGLE_SHEET_URL)
 EXPECTED_COLS = ['part_number', 'description', 'model', 'unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
 SALES_COLS = ['timestamp', 'customer_name', 'items_detail', 'parts_total', 'service_charge', 'discount', 'grand_total', 'total_cost', 'net_profit', 'month_year']
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def load_data():
     try:
         cache_buster = int(time.time())
@@ -65,18 +52,25 @@ def load_data():
             
         df_loaded = df_loaded.dropna(subset=['part_number'])
         df_loaded = df_loaded[df_loaded['part_number'].astype(str).str.strip() != ""]
-        return df_loaded
-    except Exception as e:
-        # Emergency Local Backup Fallback
-        if os.path.exists("inventory_backup.csv"):
-            try:
-                df_loaded = pd.read_csv("inventory_backup.csv")
-                st.warning("⚠️ Network/Google Sheet unreachable. Loaded from local emergency backup file.")
-                return df_loaded
-            except Exception:
-                pass
-        st.warning(f"Could not load online Google Sheet, using empty fallback. Details: {e}")
-        return pd.DataFrame(columns=EXPECTED_COLS)
+        if not df_loaded.empty:
+            return df_loaded
+    except Exception:
+        pass
+
+    if os.path.exists("inventory_backup.csv"):
+        try:
+            df_loaded = pd.read_csv("inventory_backup.csv")
+            for col in EXPECTED_COLS:
+                if col not in df_loaded.columns:
+                    df_loaded[col] = ""
+            num_cols = ['unit_cost', 'unit_mrp', 'stock_qty', 'min_threshold', 'units_sold']
+            for col in num_cols:
+                df_loaded[col] = pd.to_numeric(df_loaded[col], errors='coerce').fillna(0)
+            return df_loaded
+        except Exception:
+            pass
+
+    return pd.DataFrame(columns=EXPECTED_COLS)
 
 def save_data(df_to_save):
     try:
@@ -98,39 +92,31 @@ def save_data(df_to_save):
         df_to_save = df_to_save.dropna(subset=['part_number'])
         df_to_save = df_to_save[df_to_save['part_number'] != ""]
 
-        # Always save local safety snapshot immediately
         df_to_save.to_csv("inventory_backup.csv", index=False)
 
         if WEB_APP_URL:
-            with st.spinner("Syncing changes to Google Sheet..."):
-                records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
-                clean_records = []
-                for row in records:
-                    clean_row = {}
-                    for k, v in row.items():
-                        if isinstance(v, float) and (pd.isna(v) or v == float('inf') or v == float('-inf')):
-                            clean_row[k] = 0.0
-                        else:
-                            clean_row[k] = v
-                    clean_records.append(clean_row)
+            records = df_to_save[EXPECTED_COLS].to_dict(orient="records")
+            clean_records = []
+            for row in records:
+                clean_row = {}
+                for k, v in row.items():
+                    if isinstance(v, float) and (pd.isna(v) or v == float('inf') or v == float('-inf')):
+                        clean_row[k] = 0.0
+                    else:
+                        clean_row[k] = v
+                clean_records.append(clean_row)
 
-                payload = {
-                    "type": "inventory",
-                    "data": clean_records
-                }
-                response = requests.post(WEB_APP_URL, json=payload, timeout=10)
-                
-            if response.status_code == 200:
-                st.sidebar.success("Successfully synced!")
-            else:
-                st.sidebar.error(f"Sync failed: {response.status_code}")
-    except Exception as e:
-        st.sidebar.error(f"Float/Sync error: {e}")
+            payload = {
+                "type": "inventory",
+                "data": clean_records
+            }
+            requests.post(WEB_APP_URL, json=payload, timeout=15)
+    except Exception:
+        pass
 
-# --- BACKGROUND AUTOMATIC BACKUP WORKER ---
 def background_backup_worker():
     while True:
-        time.sleep(3600)  # Runs every 1 hour
+        time.sleep(3600)  
         try:
             if os.path.exists("inventory_backup.csv"):
                 timestamp_name = f"backups/inventory_backup_{time.strftime('%Y%m%d_%H%M%S')}.csv"
@@ -147,7 +133,7 @@ if not st.session_state.get('backup_thread_started', False):
 def load_sales_log():
     try:
         if WEB_APP_URL:
-            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=2, allow_redirects=True)
+            response = requests.get(f"{WEB_APP_URL}?action=get_sales", timeout=5, allow_redirects=True)
             if response.status_code == 200:
                 sales_data = response.json()
                 if isinstance(sales_data, list):
@@ -167,11 +153,10 @@ def save_sale_to_cloud(new_sale_row_dict):
                 "type": "sale",
                 "data": new_sale_row_dict
             }
-            requests.post(WEB_APP_URL, json=payload, timeout=10)
-    except Exception as e:
-        st.error(f"Error saving sale to cloud: {e}")
+            requests.post(WEB_APP_URL, json=payload, timeout=15)
+    except Exception:
+        pass
 
-# --- PDF GENERATOR FUNCTION ---
 def generate_invoice_pdf(cust_name, bill_items, subtotal_parts, total_cgst, total_sgst, service_charge, discount, grand_total, transaction_time):
     temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".pdf")
     c = canvas.Canvas(temp_file.name, pagesize=landscape(letter))
@@ -265,73 +250,13 @@ with st.spinner("Loading application data..."):
     df = load_data()
     sales_df = load_sales_log()
 
-def parse_tvs_label(scanned_text):
-    part_no = ""
-    description = ""
-    mrp_val = 0.0
-    
-    if not scanned_text:
-        return part_no, description, mrp_val
-        
-    lines = scanned_text.split('\n')
-    cleaned_lines = [l.strip() for l in lines if l.strip()]
-    
-    for line in cleaned_lines:
-        line_upper = line.upper()
-        
-        if not part_no:
-            match_pn = re.search(r'\b[A-Z]{1,2}\d{5,7}\b', line_upper)
-            if match_pn:
-                part_no = match_pn.group(0)
-        
-        if mrp_val == 0.0 and ("MRP" in line_upper or "RS" in line_upper):
-            match_mrp = re.findall(r'(\d+\.\d{2})', line)
-            if match_mrp:
-                mrp_val = float(match_mrp[-1])
-                
-        if not description and "PRODUCT" in line_upper:
-            cleaned_desc = re.sub(r'PRODUCT[:\s]*', '', line, flags=re.IGNORECASE).strip()
-            if len(cleaned_desc) > 2:
-                description = cleaned_desc
-
-    if mrp_val == 0.0:
-        for line in cleaned_lines:
-            match_all_nums = re.findall(r'(\d+\.\d{2})', line)
-            if match_all_nums:
-                mrp_val = float(match_all_nums[0])
-                break
-
-    return part_no, description, mrp_val
-
 # --- SIDEBAR CONTROLS ---
-st.sidebar.header("📷 Label Scanner")
-uploaded_photo = st.sidebar.file_uploader("Snap/Upload Part Sticker", type=["jpg", "jpeg", "png"])
-
-scanned_part = ""
-scanned_desc = ""
-scanned_mrp = 0.0
-
-if uploaded_photo:
-    try:
-        img = Image.open(uploaded_photo)
-        ocr_text = pytesseract.image_to_string(img)
-        scanned_part, scanned_desc, scanned_mrp = parse_tvs_label(ocr_text)
-        if scanned_part:
-            st.sidebar.success(f"Detected Part: {scanned_part}")
-        else:
-            st.sidebar.warning("Could not auto-detect part number.")
-    except Exception as e:
-        st.sidebar.error(f"Scanner Error: {e}")
-
-st.sidebar.markdown("---")
-
-# --- UNIFIED PART MANAGER ---
 st.sidebar.header("📦 Part Manager & Stock Control")
 
 if "lookup_part_input" not in st.session_state:
-    st.session_state["lookup_part_input"] = scanned_part
+    st.session_state["lookup_part_input"] = ""
 
-input_part_no = st.sidebar.text_input("Enter/Scan Part Number", value=st.session_state["lookup_part_input"])
+input_part_no = st.sidebar.text_input("Enter Part Number", value=st.session_state["lookup_part_input"])
 
 matched_row = None
 if input_part_no.strip() and not df.empty and 'part_number' in df.columns:
@@ -351,9 +276,9 @@ with st.sidebar.form("unified_part_form"):
     else:
         if input_part_no.strip():
             st.warning("⚠️ Part not found. Fill details to add new part.")
-        val_desc = scanned_desc
+        val_desc = ""
         val_model = "Universal"
-        val_mrp = float(scanned_mrp) if scanned_mrp > 0 else 0.0
+        val_mrp = 0.0
         val_qty = 0
         val_min = 5
         submit_label = "Add New Part"
@@ -430,8 +355,6 @@ else:
 
     with tab2:
         st.subheader("Interactive Master Data Editor")
-        st.caption("You can freely edit item details and customize unit costs here, or perform bulk deletion of obsolete parts.")
-        
         editor_input_df = df.drop(columns=['status'], errors='ignore')
         edited_df = st.data_editor(editor_input_df, num_rows="dynamic", key="editor")
         
@@ -459,8 +382,8 @@ else:
                     st.error(f"Error saving master data: {e}")
                 
         st.markdown("---")
-        st.subheader("🗑️ Bulk Delete Obsolete Parts")
-        parts_to_delete = st.multiselect("Select Part Numbers to Delete in Batch", df['part_number'].tolist(), key="bulk_delete_select")
+        st.subheader("🗑️ Delete Parts")
+        parts_to_delete = st.multiselect("Select Part Numbers to Delete", df['part_number'].tolist(), key="bulk_delete_select")
         if st.button("Delete Selected Parts", type="primary"):
             if parts_to_delete:
                 df = df[~df['part_number'].isin(parts_to_delete)]
@@ -473,12 +396,9 @@ else:
 
     with tab3:
         st.subheader("Record New Sale Transaction")
-        st.caption("Select sold items, enter customer WhatsApp number side-by-side, and complete checkout to generate the invoice.")
-        
         cust_name = st.text_input("Customer / Reference Name", value="Walk-in Customer")
         
         st.markdown("### 📱 Customer WhatsApp Number")
-        # WhatsApp-style side-by-side layout
         col_cc, col_num = st.columns([1, 4])
         with col_cc:
             country_code = st.text_input("Code", value="91")
@@ -637,9 +557,6 @@ else:
                     """,
                     unsafe_allow_html=True
                 )
-                st.caption("Tip: Download the PDF above first, tap the WhatsApp button to open chat with the customer, and attach your downloaded file.")
-            else:
-                st.info("💡 Enter a valid 10-digit customer WhatsApp number before checkout to activate the direct WhatsApp share button.")
 
     with tab4:
         st.subheader("Sales Performance & Monthly Profit Reports")
@@ -672,8 +589,6 @@ else:
 
             st.markdown("---")
             st.markdown("### Transaction Log & Details")
-            
-            # Interactive data table showing transaction logs right inside the app
             st.dataframe(filtered_sales, use_container_width=True)
 
             csv_data = filtered_sales.to_csv(index=False).encode('utf-8')
